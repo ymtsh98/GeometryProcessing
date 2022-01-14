@@ -34,7 +34,7 @@
   * Wave Kernel Signature (The Wave Kernel Signature: A Quantum Mechanical Approach to Shape Analysis. Aubry, M. et al. 2011)
   * ![wks](/images/wks.gif)
   * Salient Feature Extraction
-  * ![sal](/images/saplient_feat.png)
+  * ![sal](/images/salient_feat.png)
   
 * principal_curvature.hpp
   * 主曲率・方向 (Efficient Multi-scale Curvature and Crease Estimation. D. Panozzo, et al. 2010)
