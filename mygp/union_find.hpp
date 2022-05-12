@@ -4,7 +4,7 @@
 #include <iostream>
 #include <vector>
 
-namespace gp {
+namespace gp::util {
 	template <typename Index = size_t>
 	class UnionFind {
 		Index numNode;

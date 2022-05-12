@@ -80,7 +80,7 @@ bool isNonSeparation(const heds::Mesh<T>& mesh, const std::vector<size_t>& cycle
 
 	auto edge = mesh.halfedge((uint32_t)cycle[0], (uint32_t)cycle[1]);
 	std::vector<size_t> queue ={ g1, g2 };
-	std::vector<int> surfaceGroup(mesh.getNumVertices(), 0);
+	std::vector<int> surfaceGroup(mesh.getNumVerts(), 0);
 	surfaceGroup[g1] = 1;
 	surfaceGroup[g2] = 2;
 
@@ -123,7 +123,7 @@ bool isNonContraction(const heds::Mesh<T>& mesh, const std::vector<size_t>& cycl
 	// check inside and outside surfaces doesn't separeted
 	auto edge = mesh.halfedge((uint32_t)cycle[0], (uint32_t)cycle[1]);
 	std::vector<size_t> queue ={ g1, g2 };
-	std::vector<int> surfaceGroup(mesh.getNumVertices(), 0);
+	std::vector<int> surfaceGroup(mesh.getNumVerts(), 0);
 	surfaceGroup[g1] = 1;
 	surfaceGroup[g2] = 2;
 
@@ -142,7 +142,7 @@ bool isNonContraction(const heds::Mesh<T>& mesh, const std::vector<size_t>& cycl
 
 	// check separated surfaces are non zero genus
 
-	std::vector<bool> mask(mesh.getNumVertices());
+	std::vector<bool> mask(mesh.getNumVerts());
 	for (size_t i = 0; i < mask.size(); i++) mask[i] = (surfaceGroup[i] == 1 ? true : false);
 	int sg1 = countNumGenus(mesh, mask);
 
@@ -161,7 +161,7 @@ void gaussJordanElimZ2(Eigen::Matrix<bool, -1, -1>& mat, const bool pb = false) 
 	if (pb) std::cout << "gauss-jordan" << std::endl;
 
 	for (Eigen::Index i = 0, j = 0; (i < rows) && (j < cols); j++) {
-		if (pb) misc::printProgress(std::max((double)i / rows, (double)j/cols));
+		if (pb) util::printProgress(std::max((double)i / rows, (double)j/cols));
 		
 		Eigen::Index maxRow{}, ignore;
 		auto val = mat.block(i, j, rows-i, 1).maxCoeff(&maxRow, &ignore);
@@ -230,7 +230,7 @@ enum class MinCycleOpt { All, NonSeparation, NonContraction };
 
 // compute minimum cycle candidates (opt : all, non-separation, non-contraction).
 // 
-// WARNING : this code is not concerned about a mesh such that has boundary or disconnected graph.
+// WARNING : this code does not concerned about a mesh such that has boundary or disconnected graph.
 // @return cycles (vertex list) v_1 -> v_2 -> ... -> v_n
 template <typename T>
 std::vector<std::vector<size_t>> minimumCycleCandidates(
@@ -240,12 +240,12 @@ std::vector<std::vector<size_t>> minimumCycleCandidates(
 
 	if (pb) std::cout << "compute candidates" << std::endl;
 
-	std::vector<std::vector<size_t>> paths(mesh.getNumVertices());
+	std::vector<std::vector<size_t>> paths(mesh.getNumVerts());
 	std::unordered_set<size_t> cycleIdx;
-	cycleIdx.reserve(2 * mesh.getNumVertices());
+	cycleIdx.reserve(2 * mesh.getNumVerts());
 
-	for (size_t source = 0; source < mesh.getNumVertices();) {
-		auto shortestPathTree = gp::dijkstraPath(mesh, { source });
+	for (size_t source = 0; source < mesh.getNumVerts();) {
+		auto shortestPathTree = gp::dist::dijkstraPath(mesh, { source });
 
 		for (size_t i = 0; i < paths.size(); i++)
 			paths[i] = impl::getPathToSource(shortestPathTree, i);
@@ -282,7 +282,7 @@ std::vector<std::vector<size_t>> minimumCycleCandidates(
 		}
 
 		source++;
-		if (pb) misc::printProgress((double)source / mesh.getNumVertices());
+		if (pb) util::printProgress((double)source / mesh.getNumVerts());
 	}
 	if (pb) std::cout << std::endl;
 
@@ -362,7 +362,7 @@ template <typename T=double>
 std::vector<size_t> kruskalSpanningTree(const size_t n,
 	const std::vector<std::pair<uint32_t, uint32_t>>& edges,
 	std::vector<T> weights={}) {
-	UnionFind uf(n);
+	util::UnionFind uf(n);
 
 	if (weights.size() != edges.size()) weights.resize(edges.size(), 1.0);
 	std::vector<size_t> index(edges.size());
@@ -400,14 +400,14 @@ std::vector<std::vector<size_t>> treeCotreeDecomp(const heds::Mesh<T>& mesh) {
 		edgeLengths.emplace_back(mesh.length(emap.second));
 	}
 
-	auto primMst = kruskalSpanningTree(mesh.getNumVertices(), tree, edgeLengths);
+	auto primMst = kruskalSpanningTree(mesh.getNumVerts(), tree, edgeLengths);
 
 	std::vector<bool> inPrimMst(mesh.getNumEdges(), false);
 	for (const auto i : primMst) inPrimMst[i] = true;
 
 	//---------- construct dual mesh ----------
-	auto [dP, dF] = dualMesh(mesh);
-	heds::Mesh dmesh(dP, dF);
+	auto [dP, dF] = util::dualMesh(mesh);
+	heds::Mesh<Eigen::MatrixXd> dmesh(dP, dF);
 
 	//---------- compute cotree ----------
 	std::vector<heds::eKey> cotree;
@@ -424,7 +424,7 @@ std::vector<std::vector<size_t>> treeCotreeDecomp(const heds::Mesh<T>& mesh) {
 	}
 
 	//---------- compute dual mst ----------
-	auto dualMst = kruskalSpanningTree(dmesh.getNumVertices(), cotree, edgeLengths);
+	auto dualMst = kruskalSpanningTree(dmesh.getNumVerts(), cotree, edgeLengths);
 	std::vector<bool> inDualMst(dmesh.getNumEdges(), false);
 	for (const auto i : dualMst) inDualMst[i] = true;
 
@@ -446,24 +446,24 @@ std::vector<std::vector<size_t>> treeCotreeDecomp(const heds::Mesh<T>& mesh) {
 		adList[v].emplace_back(u);
 	}
 
-	auto cycles = impl::cycleExtraction(mesh.getNumVertices(), adList, bridges);
+	auto cycles = impl::cycleExtraction(mesh.getNumVerts(), adList, bridges);
 	return cycles;
 }
 
 // compute minimum homology basis.
 // 
-// WARNING : this code is not concerned about a mesh such that has boundary or disconnected graph.
+// WARNING : this code does not concerned about a mesh such that has boundary or disconnected graph.
 // @return cycles (vertex list) v_1 -> v_2 -> ... -> v_n
 template <typename T>
 std::vector<std::vector<size_t>> minimumHomologyBasis(
 	const heds::Mesh<T>& mesh, const bool pb = false) {
 	//--------------- prepare resource -----------------
 	
-	auto [dP, dF] = gp::dualMesh(mesh);
+	auto [dP, dF] = gp::util::dualMesh(mesh);
 	heds::Mesh dmesh(dP, dF);
 
 	std::vector<std::vector<size_t>> cycles;
-	cycles.reserve(mesh.getNumVertices() * 2);
+	cycles.reserve(mesh.getNumVerts() * 2);
 
 	std::vector<heds::eKey> tree;
 	tree.reserve(mesh.getNumEdges());
@@ -476,20 +476,20 @@ std::vector<std::vector<size_t>> minimumHomologyBasis(
 	{
 		if (pb) std::cout << "compute homology basis candidates" << std::endl;
 
-		std::vector<std::vector<size_t>> paths(mesh.getNumVertices());
-		std::vector<double> pathLengths(mesh.getNumVertices());
+		std::vector<std::vector<size_t>> paths(mesh.getNumVerts());
+		std::vector<double> pathLengths(mesh.getNumVerts());
 		std::vector<bool> inSpt(mesh.getNumEdges(), false);
 
 		std::vector<double> loopLength;
-		loopLength.reserve(mesh.getNumEdges() - mesh.getNumVertices() + 1);
+		loopLength.reserve(mesh.getNumEdges() - mesh.getNumVerts() + 1);
 		std::vector<heds::eKey> cotree;
-		cotree.reserve(mesh.getNumEdges() - mesh.getNumVertices() + 1);
+		cotree.reserve(mesh.getNumEdges() - mesh.getNumVerts() + 1);
 
 		std::vector<bool> inMst(dmesh.getNumEdges(), false);
 
-		for (size_t source = 0; source < mesh.getNumVertices();) {
+		for (size_t source = 0; source < mesh.getNumVerts();) {
 			//---------- compute shortest path tree ----------
-			auto shortestPathTree = gp::dijkstraPath(mesh, { source });
+			auto shortestPathTree = gp::dist::dijkstraPath(mesh, { source });
 
 			std::fill(inSpt.begin(), inSpt.end(), false);
 
@@ -514,7 +514,7 @@ std::vector<std::vector<size_t>> minimumHomologyBasis(
 				cotree.emplace_back(emap.second->adjacentFaces());
 			}
 
-			auto maxSpanningTree = kruskalSpanningTree(dmesh.getNumVertices(), cotree, loopLength);
+			auto maxSpanningTree = kruskalSpanningTree(dmesh.getNumVerts(), cotree, loopLength);
 			std::fill(inMst.begin(), inMst.end(), false);
 			for (const auto i : maxSpanningTree) inMst[i] = true;
 
@@ -533,11 +533,11 @@ std::vector<std::vector<size_t>> minimumHomologyBasis(
 				adList[v].emplace_back(u);
 			}
 			
-			auto tct = impl::cycleExtraction(mesh.getNumVertices(), adList, bridges);
+			auto tct = impl::cycleExtraction(mesh.getNumVerts(), adList, bridges);
 			cycles.insert(cycles.end(), tct.begin(), tct.end());
 
 			source++;
-			if (pb) misc::printProgress((double)source / mesh.getNumVertices());
+			if (pb) util::printProgress((double)source / mesh.getNumVerts());
 		}
 
 		if (pb) std::cout << std::endl;

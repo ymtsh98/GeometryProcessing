@@ -3,17 +3,17 @@
 #include <mygp/halfedge_mesh.hpp>
 #include <mygp/geocore.hpp>
 
-#include <unsupported/Eigen/FFT>
+//#include <unsupported/Eigen/FFT>
 
-namespace gp {
+namespace gp::feat {
 	template <typename T>
 	Eigen::VectorXd meanCurvature(const heds::Mesh<T>& mesh, const Eigen::SparseMatrix<double>& lbo,
 																const Eigen::VectorXd& areas) {
 
-		Eigen::MatrixXd verts(mesh.getNumVertices(), 3);
-		for (size_t i = 0; i < mesh.getNumVertices(); i++) verts.row(i) = mesh.getPosition<Eigen::Vector3d>(i);
+		Eigen::MatrixXd verts(mesh.getNumVerts(), 3);
+		for (size_t i = 0; i < mesh.getNumVerts(); i++) verts.row(i) = mesh.getPosition<Eigen::Vector3d>(i);
 
-		Eigen::SparseMatrix<double> A(mesh.getNumVertices(), mesh.getNumVertices());
+		Eigen::SparseMatrix<double> A(mesh.getNumVerts(), mesh.getNumVerts());
 		A.setIdentity();
 		A.diagonal().array() *= (1.0 / areas.array());
 
@@ -22,7 +22,7 @@ namespace gp {
 
 	template <typename T>
 	Eigen::VectorXd gaussianCurvature(const heds::Mesh<T>& mesh, const Eigen::VectorXd& areas) {
-		Eigen::VectorXd curvature(mesh.getNumVertices());
+		Eigen::VectorXd curvature(mesh.getNumVerts());
 		curvature.fill(2.0 * std::numbers::pi);
 	
 		for (const auto& face : mesh.faces) {
@@ -122,9 +122,9 @@ namespace gp {
 		return wave;
 	}
 	
-	// heat kernel signature
+	// heat kernel signatures
 	// @return |V| x numSample matrix
-	Eigen::MatrixXd timeStepHKS(const Eigen::VectorXd& eigenvals,
+	Eigen::MatrixXd heatKernelSigs(const Eigen::VectorXd& eigenvals,
 															const Eigen::MatrixXd& eigenvecs,
 															const size_t numSample) {
 		Eigen::MatrixXd hks(eigenvecs.rows(), numSample);
@@ -133,6 +133,30 @@ namespace gp {
 		auto energy = hksParams(eigenvals[1], eigenvals[numeigs - 1], numSample);
 	
 		Eigen::MatrixXd phi2 = Eigen::pow(eigenvecs.block(0, 1, eigenvecs.rows(), numeigs - 1).array(), 2.0);
+		Eigen::VectorXd E = eigenvals.block(1, 0, numeigs - 1, 1);
+		for (size_t i = 0; i < numSample; i++) {
+			Eigen::VectorXd C = Eigen::exp(-energy[i] * E.array());
+	
+			hks.col(i).array() = (phi2.array().rowwise() * C.transpose().array()).rowwise().sum() / C.sum();
+		}
+	
+		return hks;
+	}
+	
+	// heat kernel signatures
+	// @return |V| x numSample matrix
+	Eigen::MatrixXd heatKernelSigs(const Eigen::VectorXd& eigenvals,
+															const Eigen::MatrixXd& eigenvecs,
+															const size_t numSample, const size_t landmark) {
+		Eigen::MatrixXd hks(eigenvecs.rows(), numSample);
+	
+		size_t numeigs = eigenvals.size();
+		//auto energy = hksParams(eigenvals[1], eigenvals[numeigs - 1], numSample);
+		auto energy = hksParams(eigenvals[1], eigenvals.maxCoeff(), numSample);
+	
+		Eigen::MatrixXd lm = eigenvecs.row(landmark).replicate(eigenvecs.rows(), 1);
+		Eigen::MatrixXd phi2 = (lm.array() * eigenvecs.array()).block(0, 1, eigenvecs.rows(), numeigs - 1);
+
 		Eigen::VectorXd E = eigenvals.block(1, 0, numeigs - 1, 1);
 		for (size_t i = 0; i < numSample; i++) {
 			Eigen::VectorXd C = Eigen::exp(-energy[i] * E.array());
@@ -183,39 +207,17 @@ namespace gp {
 	//	//return hks.block(0, 0, eigenvecs.rows(), 50);
 	//}
 
-	// heat kernel signature
+	// wave kernel signatures
 	// @return |V| x numSample matrix
-	Eigen::MatrixXd timeStepHKS(const Eigen::VectorXd& eigenvals,
-															const Eigen::MatrixXd& eigenvecs,
-															const size_t numSample, const size_t landmark) {
-		Eigen::MatrixXd hks(eigenvecs.rows(), numSample);
-	
-		size_t numeigs = eigenvals.size();
-		auto energy = hksParams(eigenvals[1], eigenvals[numeigs - 1], numSample);
-	
-		Eigen::MatrixXd lm = eigenvecs.row(landmark).replicate(eigenvecs.rows(), 1);
-		Eigen::MatrixXd phi2 = (lm.array() * eigenvecs.array()).block(0, 1, eigenvecs.rows(), numeigs - 1);
-
-		Eigen::VectorXd E = eigenvals.block(1, 0, numeigs - 1, 1);
-		for (size_t i = 0; i < numSample; i++) {
-			Eigen::VectorXd C = Eigen::exp(-energy[i] * E.array());
-	
-			hks.col(i).array() = (phi2.array().rowwise() * C.transpose().array()).rowwise().sum() / C.sum();
-		}
-	
-		return hks;
-	}
-	
-	// wave kernel signature
-	// @return |V| x numSample matrix
-	Eigen::MatrixXd timeStepWKS(const Eigen::VectorXd& eigenvals,
+	Eigen::MatrixXd waveKernelSigs(const Eigen::VectorXd& eigenvals,
 															const Eigen::MatrixXd& eigenvecs,
 															const size_t numSample) {
 	
 		Eigen::MatrixXd wks(eigenvecs.rows(), numSample);
 	
 		size_t numeigs = eigenvals.size();
-		auto [energy, sigma] = wksParams(eigenvals[1], eigenvals[numeigs-1], numSample);
+		//auto [energy, sigma] = wksParams(eigenvals[1], eigenvals[numeigs-1], numSample);
+		auto [energy, sigma] = wksParams(eigenvals[1], eigenvals.maxCoeff(), numSample);
 	
 		Eigen::MatrixXd phi2 = Eigen::pow(eigenvecs.block(0, 1, eigenvecs.rows(), numeigs-1).array(), 2.0);
 		Eigen::VectorXd E = Eigen::log(eigenvals.array()).block(1, 0, numeigs-1, 1);
@@ -230,16 +232,17 @@ namespace gp {
 		return wks;
 	}
 	
-	// wave kernel signature
+	// wave kernel signatures
 	// @return |V| x numSample matrix
-	Eigen::MatrixXd timeStepWKS(const Eigen::VectorXd& eigenvals,
+	Eigen::MatrixXd waveKernelSigs(const Eigen::VectorXd& eigenvals,
 															const Eigen::MatrixXd& eigenvecs,
 															const size_t numSample,
 															const size_t landmark) {
 		Eigen::MatrixXd wks(eigenvecs.rows(), numSample);
 	
 		size_t numeigs = eigenvals.size();
-		auto [energy, sigma] = wksParams(eigenvals[1], eigenvals[numeigs-1], numSample);
+		//auto [energy, sigma] = wksParams(eigenvals[1], eigenvals[numeigs-1], numSample);
+		auto [energy, sigma] = wksParams(eigenvals[1], eigenvals.maxCoeff(), numSample);
 	
 		Eigen::MatrixXd lm = eigenvecs.row(landmark).replicate(eigenvecs.rows(), 1);
 		Eigen::MatrixXd phi2 = (lm.array() * eigenvecs.array()).block(0, 1, eigenvecs.rows(), numeigs - 1);
@@ -256,40 +259,40 @@ namespace gp {
 		return wks;
 	}
 	
-	// mean curvature
+	// mean curvatures
 	// @return |V| x numSample matrix
 	template <typename T>
-	Eigen::MatrixXd timeStepMC(const heds::Mesh<T>& mesh, const Eigen::SparseMatrix<double>& lbo, 
-														 const Eigen::VectorXd& areas, const size_t numSample, const double time = 1.0) {
-		Eigen::MatrixXd mc(mesh.getNumVertices(), numSample);
-		auto curvature = meanCurvature(mesh, lbo, areas);
+	Eigen::MatrixXd meanCurvatures(const heds::Mesh<T>& mesh, const Eigen::SparseMatrix<double>& lbo, 
+														 const Eigen::VectorXd& areas, const size_t numSample, const double time = 0.2) {
+		Eigen::MatrixXd mc(mesh.getNumVerts(), numSample);
+		mc.col(0) = meanCurvature(mesh, lbo, areas);
 
 		Eigen::SparseMatrix<double> A(lbo.rows(), lbo.rows());
 		A.setIdentity();
+		//A.diagonal().array() *= areas.array();
 		Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver(A + time * lbo);
 
-		for (size_t i = 0; i < numSample; i++) {
-			mc.col(i) = curvature;
-			curvature = solver.solve(curvature);
+		for (size_t i = 1; i < numSample; i++) {
+			mc.col(i) = solver.solve(mc.col(i-1));
 		}
 		return mc;
 	}
 	
-	// gaussian curvature
+	// gaussian curvatures
 	// @return |V| x numSample matrix
 	template <typename T>
-	Eigen::MatrixXd timeStepGC(const heds::Mesh<T>& mesh, const Eigen::SparseMatrix<double>& lbo, 
-														 const Eigen::VectorXd& areas, const size_t numSample, const double time = 1.0) {
-		Eigen::MatrixXd gc(mesh.getNumVertices(), numSample);
-		auto curvature = gaussianCurvature(mesh, areas);
+	Eigen::MatrixXd gaussianCurvatures(const heds::Mesh<T>& mesh, const Eigen::SparseMatrix<double>& lbo, 
+														 const Eigen::VectorXd& areas, const size_t numSample, const double time = 0.2) {
+		Eigen::MatrixXd gc(mesh.getNumVerts(), numSample);
+		gc.col(0) = gaussianCurvature(mesh, areas);
 
 		Eigen::SparseMatrix<double> A(lbo.rows(), lbo.rows());
 		A.setIdentity();
+		//A.diagonal().array() *= areas.array();
 		Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver(A + time * lbo);
 
-		for (size_t i = 0; i < numSample; i++) {
-			gc.col(i) = curvature;
-			curvature = solver.solve(curvature);
+		for (size_t i = 1; i < numSample; i++) {
+			gc.col(i) = solver.solve(gc.col(i-1));
 		}
 		return gc;
 	}

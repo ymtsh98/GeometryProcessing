@@ -5,7 +5,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
-namespace gp::impl::qem {
+namespace gp::simp::impl {
 	template <typename T>
 	Eigen::Matrix4d computeQEM(const heds::Mesh<T>& mesh, const size_t i) {
 		Eigen::Matrix4d Q = Eigen::Matrix4d::Zero();
@@ -126,11 +126,11 @@ namespace gp::impl::qem {
 
 }
 
-namespace gp {
+namespace gp::simp {
 	// warning : rewrites binded positions
 	template <typename T>
 	void qemSimplification(heds::Mesh<T>& mesh, const size_t numTarget, const double nflipThres=1.0) {
-		size_t nv = mesh.getNumVertices();
+		size_t nv = mesh.getNumVerts();
 
 		// --------------- initialization ---------------
 
@@ -139,18 +139,26 @@ namespace gp {
 		std::vector<Eigen::Matrix4d> quadricErrorMetrices(nv);
 		#pragma omp parallel for
 		for (int i = 0; i < nv; i++) {
-			quadricErrorMetrices[i] = impl::qem::computeQEM(mesh, i);
+			quadricErrorMetrices[i] = impl::computeQEM(mesh, i);
 		}
 
 		using node = std::tuple<double, size_t, size_t, heds::pte, Eigen::Vector3d>;
-		auto compare = [](auto& l, auto& r) { return std::get<0>(l) > std::get<0>(r); };
-		std::priority_queue<node, std::vector<node>, decltype(compare)> queue;
-
-		for (const auto& emap : mesh.edges) {
-			auto [pi, pj] = emap.first;
-			auto [cost, optv] = impl::qem::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
-			queue.emplace(cost, 0, 0, emap.second, optv);
+		std::vector<node> buffer(mesh.getNumEdges());
+		//for (const auto& emap : mesh.edges) {
+		//	auto [pi, pj] = emap.first;
+		//	auto [cost, optv] = impl::qem::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
+		//	queue.emplace(cost, 0, 0, emap.second, optv);
+		//}
+		#pragma omp parallel for
+		for (int i = 0; i < mesh.edges.bucket_count(); i++) {
+			for (auto itr = mesh.edges.begin(i); itr != mesh.edges.end(i); ++itr) {
+				auto [pi, pj] = itr->first;
+				auto [cost, optv] = impl::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
+				buffer[itr->second->id/2] = std::make_tuple(cost, 0, 0, itr->second, optv);
+			}
 		}
+		auto compare = [](auto& l, auto& r) { return std::get<0>(l) > std::get<0>(r); };
+		std::priority_queue<node, std::vector<node>, decltype(compare)> queue(decltype(compare)(), std::move(buffer));
 
 		// --------------- main loop ---------------
 
@@ -159,7 +167,6 @@ namespace gp {
 			queue.pop();
 
 			auto pi = edge->vert->id, pj = edge->pair->vert->id;
-
 			if (vertexCounter[pi] != c1 || vertexCounter[pj] != c2 ||
 					edge != edge->pair->pair || !edge->isContractible()) continue;
 
@@ -171,26 +178,26 @@ namespace gp {
 
 			vertexCounter[pi]++;
 			quadricErrorMetrices[pi] += quadricErrorMetrices[pj];
-			auto ine = v->incidentEdges();
+			auto&& ine = v->incidentEdges();
 			for (const auto& e : ine) vertexCounter[e->pair->vert->id]++;
 
 			for (const auto& e : ine) {
 				pi = v->id; pj = e->pair->vert->id;
 
-				std::tie(cost, optv) = impl::qem::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
+				std::tie(cost, optv) = impl::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
 				queue.emplace(cost, vertexCounter[pi], vertexCounter[pj], e, optv);
 
 				if (e->face == nullptr) continue;
 
-				auto en = e->next->next;
+				auto& en = e->next->next;
 				pi = en->vert->id; pj = en->pair->vert->id;
-				std::tie(cost, optv) = impl::qem::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
+				std::tie(cost, optv) = impl::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
 				queue.emplace(cost, vertexCounter[pi], vertexCounter[pj], en, optv);
 			}
 
 			nv--;
 		}
-
+		
 		// --------------- post process ---------------
 		std::deque<size_t> deque;
 		for (size_t i = 0; i < vertexCounter.size(); i++) {
@@ -209,8 +216,6 @@ namespace gp {
 		mesh.verts.resize(nv);
 		mesh.resizePosition(nv);
 
-		mesh.edges.clear();
-
 		size_t nf = 0;
 		deque.clear();
 		for (size_t i = 0; i < mesh.getNumFaces(); i++) {
@@ -218,14 +223,6 @@ namespace gp {
 				deque.emplace_back(i);
 			} else {
 				nf++;
-
-				auto e0 = mesh.faces[i]->edge;
-				auto e = mesh.faces[i]->edge;
-				do {
-					heds::eKey key(e->vert->id, e->pair->vert->id);
-					if (!mesh.edges.contains(heds::keyPair(key))) mesh.edges[key] = e;
-					e = e->next;
-				} while (e0 != e);
 
 				if (deque.size() == 0) continue;
 				auto j = deque.front();
@@ -237,6 +234,13 @@ namespace gp {
 		}
 
 		mesh.faces.resize(nf);
+		auto&& faces = mesh.faceIndexList();
+		auto pV = mesh.getPbind();
+
+		mesh.reset();
+		mesh.build(nv, faces);
+		mesh.pbind(pV);
+
 	}
 
 	// TODO : sloppy implementation
@@ -257,7 +261,7 @@ namespace gp {
 		std::vector<Eigen::Matrix4d> quadricErrorMetrices(mesh.getNumVertices());
 		#pragma omp parallel for
 		for (int i = 0; i < quadricErrorMetrices.size(); i++) {
-			quadricErrorMetrices[i] = impl::qem::computeQEM(mesh, i);
+			quadricErrorMetrices[i] = impl::computeQEM(mesh, i);
 		}
 
 		Eigen::MatrixXd representPos = Eigen::MatrixXd::Zero(numGrid * numGrid * numGrid, 3);

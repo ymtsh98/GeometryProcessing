@@ -8,7 +8,7 @@
 #include <tuple>
 #include <vector>
 
-namespace mio {
+namespace gp::mio {
 	std::vector<std::string> split(const std::string& str, const char delim = ' ') {
 		std::istringstream is(str);
 		std::vector<std::string> results;
@@ -49,7 +49,6 @@ namespace mio {
 		}
 		return faces;
 	}
-
 
 	template<typename T1 = std::vector<double>, typename T2 = std::vector<int>>
 	std::tuple<std::vector<T1>, std::vector<T2>> loadOFF(const std::string & path) {
@@ -551,6 +550,42 @@ namespace mio {
 												std::to_string(face[0] + 1) + " " + 
 												std::to_string(face[1] + 1) + " " + 
 												std::to_string(face[2] + 1) + "\n");
+		}
+		f << wr;
+		f.close();
+	}
+
+	template<typename T1, typename T2>
+	void saveOBJev(std::string_view saveName, const T1& vertices, const T2& faces) {
+		std::ofstream f(saveName.data());
+		std::string wr = "";
+
+		for (size_t i = 0; i < (size_t)vertices.rows(); i++) {
+			wr += std::string("v " + std::to_string(vertices(i, 0)) + " " + std::to_string(vertices(i, 1)) + " " + std::to_string(vertices(i, 2)) + "\n");
+		}
+		for (auto& face : faces) {
+			wr += std::string("f " +
+				std::to_string(face[0] + 1) + " " +
+				std::to_string(face[1] + 1) + " " +
+				std::to_string(face[2] + 1) + "\n");
+		}
+		f << wr;
+		f.close();
+	}
+
+	template<typename T1, typename T2>
+	void saveOBJind(std::string_view saveName, const T1& vertices, const T2& indices) {
+		std::ofstream f(saveName.data());
+		std::string wr = "";
+
+		for (auto& v : vertices) {
+			wr += std::string("v " + std::to_string(v[0]) + " " + std::to_string(v[1]) + " " + std::to_string(v[2]) + "\n");
+		}
+		for (size_t i = 0; i < indices.size(); i+=3) {
+			wr += std::string("f " +
+				std::to_string(indices[i + 0] + 1) + " " +
+				std::to_string(indices[i + 1] + 1) + " " +
+				std::to_string(indices[i + 2] + 1) + "\n");
 		}
 		f << wr;
 		f.close();

@@ -1,10 +1,11 @@
+#pragma once
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/AutoTune.h>
 #include <faiss/impl/AuxIndexStructures.h>
 #include <faiss/index_io.h>
 
-namespace gp {
+namespace gp::spart {
 	template <bool TRAIN = false>
 	class FaissKNN {
 		typedef Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> RowMatXf;

@@ -2,7 +2,7 @@
 #include <mygp/halfedge_mesh.hpp>
 #include <mygp/geocore.hpp>
 
-namespace gp::impl::pc {
+namespace gp::curv::impl {
 	template <typename T>
 	std::vector<size_t> rRingNeighbsCache(const heds::Mesh<T>& mesh, const size_t src, const double radius, 
 		std::vector<double>& minDist, 
@@ -12,7 +12,7 @@ namespace gp::impl::pc {
 		using node = std::pair<double, size_t>;
 		std::priority_queue<node, std::vector<node>, std::greater<node>> search;
 		search.emplace(0.0, src);
-		std::vector<bool> used(mesh.getNumVertices(), false);
+		std::vector<bool> used(mesh.getNumVerts(), false);
 		used[src] = true;
 		minDist[src] = 0.0;
 
@@ -45,7 +45,7 @@ namespace gp::impl::pc {
 		using node = std::pair<size_t, size_t>;
 		std::priority_queue<node, std::vector<node>, std::greater<node>> search;
 		search.emplace(0, src);
-		std::vector<bool> used(mesh.getNumVertices(), false);
+		std::vector<bool> used(mesh.getNumVerts(), false);
 		used[src] = true;
 
 		while (!search.empty()) {
@@ -167,39 +167,50 @@ namespace gp::impl::pc {
 
 }
 
-namespace gp {
+namespace gp::curv {
+	/// @param mesh 
+	/// @param radius 
+	/// @param kring 
+	/// @return minimum/maximum curvature, minimum/maximum direction.
 	template <typename T>
 	std::tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::MatrixXd, Eigen::MatrixXd> 
 		principalCurvature(const heds::Mesh<T>& mesh, const size_t radius=4, const bool kring=false) {
-		size_t n = mesh.getNumVertices();
+		size_t n = mesh.getNumVerts();
 	
 		Eigen::VectorXd minCurvature(n), maxCurvature(n);
 		Eigen::MatrixXd minDirection(n, 3), maxDirection(n, 3);
 	
-		double mel = mesh.meanEdgeLength();
-		Eigen::MatrixXd normals = vertexNormals(mesh);
+		double mel = mesh.avgEdgeLength();
+		Eigen::MatrixXd normals = util::vertexNormals(mesh);
 
 		std::vector<double> cacheDist;
 		if (!kring) cacheDist.resize(n, std::numeric_limits<double>::max());
-		auto oneringNeighbs = mesh.adjacencyList();
+		auto&& oneringNeighbs = mesh.adjacencyList();
 
-		#pragma omp parallel for firstprivate(cacheDist)
-		for (int i = 0; i < n; i++) {
-			std::vector<size_t> neighbs;
-			if (!kring) neighbs = impl::pc::rRingNeighbsCache(mesh, i, mel * radius, cacheDist, oneringNeighbs);
-			if (kring || neighbs.size() < 6) neighbs = impl::pc::kRingNeighbsCache(mesh, i, radius, oneringNeighbs);
-			neighbs = impl::pc::decimateNeighbs(mesh, i, neighbs, normals);
+		#pragma omp parallel
+		{
+			#pragma omp for firstprivate(cacheDist)
+			for (int i = 0; i < n; i++) {
+				std::vector<size_t> neighbs;
+				if (!kring) neighbs = impl::rRingNeighbsCache(mesh, i, mel * radius, cacheDist, oneringNeighbs);
+				if (kring || neighbs.size() < 6) neighbs = impl::kRingNeighbsCache(mesh, i, radius, oneringNeighbs);
+				neighbs = impl::decimateNeighbs(mesh, i, neighbs, normals);
 
-			auto normal = impl::pc::averageNormal(mesh, i, neighbs, normals);
-			auto lf = impl::pc::findLocalFrame(mesh, i, normal);
-			auto quad = impl::pc::quadricFitting(mesh, i, neighbs, lf);
-			auto [minc, maxc, mindir, maxdir] = impl::pc::computeCurvature(lf, quad);
-			minCurvature(i) = minc;
-			maxCurvature(i) = maxc;
-			minDirection.row(i) = mindir;
-			maxDirection.row(i) = maxdir;
+				auto normal = impl::averageNormal(mesh, i, neighbs, normals);
+				auto lf = impl::findLocalFrame(mesh, i, normal);
+				auto quad = impl::quadricFitting(mesh, i, neighbs, lf);
+				auto [minc, maxc, mindir, maxdir] = impl::computeCurvature(lf, quad);
+
+				minCurvature(i) = minc;
+				maxCurvature(i) = maxc;
+				minDirection.row(i) = mindir;
+				maxDirection.row(i) = maxdir;
+
+			}
+			#pragma omp barrier
+			{}
 		}
-	
+		
 		return std::make_tuple(minCurvature, maxCurvature, 
 			minDirection, maxDirection);
 	}

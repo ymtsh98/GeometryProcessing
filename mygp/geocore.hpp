@@ -1,9 +1,10 @@
 #pragma once
+#include <queue>
 #include <mygp/geoutil.hpp>
 #include <mygp/halfedge_mesh.hpp>
 #include <mygp/union_find.hpp>
 
-namespace gp {
+namespace gp::util {
 	template <typename T1, typename T2>
 	auto connectedMesh(const T1& pos, const T2& faces) {
 		UnionFind uf(pos.size());
@@ -21,7 +22,7 @@ namespace gp {
 
 	template <typename T>
 	Eigen::MatrixXd vertexNormals(const heds::Mesh<T>& mesh) {
-		Eigen::MatrixXd normals = Eigen::MatrixXd::Zero(mesh.getNumVertices(), 3);
+		Eigen::MatrixXd normals = Eigen::MatrixXd::Zero(mesh.getNumVerts(), 3);
 		for (size_t i = 0; i < mesh.getNumFaces(); i++) {
 			auto n = mesh.normal<Eigen::Vector3d>(mesh.faces[i]);
 			for (const auto& v : mesh.faces[i]->adjacentVerts()) {
@@ -58,7 +59,7 @@ namespace gp {
 		else normals.resize(pos.size(), T1{ (T3)0., (T3)0., (T3)0.});
 
 		for (size_t i = 0; i < indices.size(); i+=3) {
-			auto n = cross3<std::vector<T3>>(pos[indices[i]], pos[indices[i+1]], pos[indices[i+2]]);
+			auto n = gp::util::cross3<std::vector<T3>>(pos[indices[i]], pos[indices[i+1]], pos[indices[i+2]]);
 			for (size_t j = 0; j < 3; j++) {
 				normals[indices[i]][j] += n[j];
 				normals[indices[i+1]][j] += n[j];
@@ -66,7 +67,7 @@ namespace gp {
 			}
 		}
 		for (size_t i = 0; i < pos.size(); i++) {
-			normalized(normals[i]);
+			normals[i] = util::normalized(normals[i]);
 		}
 		return normals;
 	}
@@ -153,30 +154,35 @@ namespace gp {
 	}
 
 	Eigen::VectorXd heatDiffusion(const Eigen::SparseMatrix<double>& lbo,
-																const Eigen::VectorXd& areas, 
-																const Eigen::VectorXd& heat,
-																const double time) {
+		const Eigen::VectorXd& areas,
+		const Eigen::VectorXd& heat,
+		const double time, 
+		const size_t step = 1) {
+		Eigen::VectorXd ret = heat;
 		Eigen::SparseMatrix<double> A(lbo.rows(), lbo.rows());
 		A.setIdentity();
 		//A.diagonal().array() *= areas.array();
 
-		Eigen::SparseLU<Eigen::SparseMatrix<double>> solver(A + time * lbo);
+		Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver(A + time * lbo);
 
-		return solver.solve(heat);
+		for (size_t i = 0; i < step; i++) {
+			ret = solver.solve(ret);
+		}
+		return ret;
 	}
 
 	template <typename Derived>
 	void taubinSmoothing(Eigen::MatrixBase<Derived>& data, const Eigen::SparseMatrix<double>& lbo, const Eigen::VectorXd& areas, 
 											 const size_t steps, const double shrink=0.33, const double inflate=0.34) {
-		Eigen::VectorXd invA = areas.asDiagonal().inverse().diagonal();
+		Eigen::VectorXd invA = 1.0/areas.array();
 		Eigen::SparseMatrix<double> S = invA.asDiagonal() * lbo;
 		invA = S.diagonal();
 		invA = invA.asDiagonal().inverse().diagonal();
 		S = invA.asDiagonal() * S;
 
 		for (size_t i = 0; i < steps; i++) {
-			data += shrink * S * data;
-			data -= inflate * S * data;
+			data += inflate * S * data;
+			data -= shrink * S * data;
 		}
 	}
 
@@ -211,7 +217,7 @@ namespace gp {
 		using node = std::pair<double, size_t>;
 		std::priority_queue<node, std::vector<node>, std::greater<node>> search;
 		search.emplace(0.0, src);
-		std::vector<std::pair<bool, double>> used(mesh.getNumVertices(), 
+		std::vector<std::pair<bool, double>> used(mesh.getNumVerts(), 
 			std::make_pair(false, std::numeric_limits<double>::max()));
 		used[src] = std::make_pair(true, 0.0);
 
@@ -241,7 +247,7 @@ namespace gp {
 		using node = std::pair<size_t, size_t>;
 		std::priority_queue<node, std::vector<node>, std::greater<node>> search;
 		search.emplace(0, src);
-		std::vector<bool> used(mesh.getNumVertices(), false);
+		std::vector<bool> used(mesh.getNumVerts(), false);
 		used[src] = true;
 
 		while (!search.empty()) {
@@ -309,7 +315,7 @@ namespace gp::shape {
 			}
 		}
 
-		auto normals = gp::vertexNormals(sphere, indices);
+		auto normals = gp::util::vertexNormals(sphere, indices);
 		std::vector<std::vector<double>> colors(sphere.size(),
 																						std::vector<double>{(double)color[0], (double)color[1], (double)color[2]});
 		return std::make_tuple(sphere, indices, normals, colors);
