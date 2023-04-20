@@ -26,8 +26,8 @@ mygp(old version) -> kika(refactored version(unfinished))
   * Fast Marching Method
   * 熱拡散による測地距離計算 (The Heat Method for Distance Computation. Crane, K. et al. 2017)
   * 仮想頂点を利用した測地距離計算（Geodesic Distance Computation via Virtual Source Propagation. Trettner, P. et al. 2021）
-  * ![dist](/images/ketten_dist.png)
-  * ![dist2](/images/astar.png)
+  * ![astar](/images/astar.png)
+  * ![dist1](/images/geodist.gif)
 
 * intrinsic features
   * mean curvature
@@ -44,11 +44,20 @@ mygp(old version) -> kika(refactored version(unfinished))
 * halfedge data structure
   
 * iterative closest point
-* coherent point drift
- 
+* coherent point drift (
+ Myronenko, Andriy and Song, Xubo. Point Set Registration: Coherent Point Drift. IEEE Transactions on Pattern Analysis and Machine Intelligence. 32. 2262-75, 2010.
+O. Hirose. A Bayesian Formulation of Coherent Point Drift. IEEE Transactions on Pattern Analysis and Machine Intelligence, 43, 2269-2286, 2021.
+O. Hirose. Acceleration of Non-Rigid Point Set Registration With Downsampling and Gaussian Process Regression. IEEE Transactions on Pattern Analysis and Machine Intelligence, 43, 2858-2865, 2021.)
+  * ![cpd1](/images/affine.gif)
+  * ![cpd2](/images/bcpd.gif)
+  
 * vector field
   * trivial connection (Trivial Connections on Discrete Surfaces. Crane, K. et al.2010.)
   * vector heat (The Vector Heat Method. Sharp, N. et al. 2019.)
+  * hodge decomposition
+  * ![field2](/images/trivialConnection.png)
+  * ![field3](/images/vector_heat.png)
+  * ![field1](/images/dir_field.gif)
   
 * differential geometry
   * cotangent weight laplacian
@@ -57,14 +66,26 @@ mygp(old version) -> kika(refactored version(unfinished))
   * diamond laplacian (The Diamond Laplace for Polygonal and Polyhedral Meshes. Bunge A., et al. 2021.)
 
 * signed distance function
+  * ![sdf](/images/mario_cart.gif)
   * marching cubes
-
+  
 * sspace partitioning
   * kd木
   * ![kdtree](/images/bunny_div.png)
 
+* spherization
+  * ![sph](/images/sphere.gif)
+  
 * union find
   
 * simplification
   * Quadric Error Metrices
   * ![qem](/images/qem.png)
+  
+* shape correspondences
+  * functional maps
+  * ![corres1](/images/shape_corres.png)
+  * ![corres2](/images/cat_to.png)
+  * ![corres3](/images/volume_uv.png)
+  * ![corres4](/images/dog2dog.gif)
+  * ![corres5](/images/rhino2wolf.gif)
