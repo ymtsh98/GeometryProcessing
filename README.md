@@ -76,8 +76,6 @@ O. Hirose. Acceleration of Non-Rigid Point Set Registration With Downsampling an
 * spherization
   * ![sph](/images/sphere.gif)
   
-* union find
-  
 * simplification
   * Quadric Error Metrices
   * ![qem](/images/qem.png)
