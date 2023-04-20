@@ -1,6 +1,7 @@
 # Geometry-Processing
 
 幾何形状処理関連の実装まとめ
+
 mygp(old version) -> kika(refactored version(unfinished))
 
 * algebraic topology
