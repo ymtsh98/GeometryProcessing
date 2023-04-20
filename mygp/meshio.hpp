@@ -1,5 +1,4 @@
 #pragma once
-#include <omp.h>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -7,642 +6,252 @@
 #include <sstream>
 #include <tuple>
 #include <vector>
+#include <mygp/lp_file.hpp>
+
+namespace gp::util {
+inline std::vector<std::string> split(const std::string& str, const char delim = ' ') {
+	std::istringstream is(str);
+	std::vector<std::string> results;
+	std::string s;
+
+	while (std::getline(is, s, delim)) {
+		results.emplace_back(s);
+	}
+	return results;
+}
+
+template <typename Idx=uint32_t, typename T = std::vector<uint32_t>>
+std::vector<Idx> faces2indices(const std::vector<T>& faces) {
+	std::vector<Idx> indices;
+	indices.reserve(faces.size() * 3);
+	for (auto& f : faces) {
+		int i = f[0], t = f[1];
+		for (size_t j = 2; j < f.size(); j++) {
+			indices.emplace_back(static_cast<Idx>(i));
+			indices.emplace_back(static_cast<Idx>(t));
+			indices.emplace_back(static_cast<Idx>(f[j]));
+			t = f[j];
+		}
+	}
+	return indices;
+}
+
+template <typename Idx=uint32_t, typename T=uint32_t>
+std::vector<std::vector<Idx>> indices2faces(const std::vector<T>& indices) {
+	std::vector<std::vector<Idx>> faces;
+	faces.resize(indices.size() / 3, std::vector<Idx>(3));
+	for (size_t i = 0; i < faces.size(); i++) {
+		faces[i][0] = static_cast<Idx>(indices[i*3 + 0]);
+		faces[i][1] = static_cast<Idx>(indices[i*3 + 1]);
+		faces[i][2] = static_cast<Idx>(indices[i*3 + 2]);
+	}
+	return faces;
+}
+
+inline bool checkFileExtension(std::string_view path, std::string_view fext) {
+	return path.length() > fext.length() &&
+		std::equal(path.rbegin(), path.rbegin() + fext.length(), fext.rbegin());
+}
+}
+
+namespace gp::mio::impl {
+template <typename T, class = void>
+struct IsEigen : std::false_type {};
+
+template <typename T>
+struct IsEigen<T, std::void_t<decltype(std::declval<T>().rows())>> : std::true_type {};
+
+template <typename T, class = void>
+struct IsStdvec : std::false_type {};
+
+template <typename T>
+struct IsStdvec<T, std::void_t<decltype(std::declval<T>().push_back())>> : std::true_type {};
+
+template <typename T, class = void>
+struct IsStdvec2d : std::false_type {};
+
+template <typename T>
+struct IsStdvec2d<T, std::void_t<decltype(std::declval<T>()[0][0])>> : std::true_type {};
+}
 
 namespace gp::mio {
-	std::vector<std::string> split(const std::string& str, const char delim = ' ') {
-		std::istringstream is(str);
-		std::vector<std::string> results;
-		std::string s;
+template<typename T1 = std::vector<double>, typename T2 = std::vector<int>>
+std::tuple<std::vector<T1>, std::vector<T2>> loadOFFvf(const std::string& path) {
+	std::tuple<std::vector<T1>, std::vector<T2>> ret;
+	std::vector<T1>& vertices = std::get<0>(ret);
+	std::vector<T2>& indices = std::get<1>(ret);
 
-		while (std::getline(is, s, delim)) {
-			results.emplace_back(s);
-		}
-		return results;
+	size_t numVerts = -1, numFaces = -1;
+
+	gp::util::LPFile f(path);
+
+	while (f.getline() != "OFF") {}
+
+	vertices.resize(std::stoi(f.getseg()), T1{ 0, 0, 0 });
+	indices.resize(std::stoi(f.getseg()));
+	f.skipline();
+	for (size_t i = 0; i < vertices.size(); i++) {
+		for (size_t j = 0; j < 3; j++) 
+			vertices[i][j] = static_cast<T1::value_type>(std::stod(f.getseg()));
 	}
 
-	template <typename T>
-	std::vector<uint32_t> faces2indices(const T& faces) {
-		std::vector<uint32_t> indices;
-		indices.reserve(faces.size() * 3);
-		for (auto& f : faces) {
-			if (f.size() == 3) {
-				for (auto i : f) indices.emplace_back((uint32_t)i);
-			} else if (f.size() > 3) {
-				int i = f[0], t = f[1];
-				for (size_t j = 2; j < f.size(); j++) {
-					indices.emplace_back((uint32_t)i);
-					indices.emplace_back((uint32_t)t);
-					indices.emplace_back((uint32_t)f[j]);
-					t = f[j];
-				}
+	for (size_t i = 0; i < indices.size(); i++) {
+		auto s = std::stoi(f.getseg());
+		indices[i] = T2(s);
+		for (int j = 0; j < s; j++)
+			indices[i][j] = std::stoi(f.getseg());
+	}
+
+	return ret;
+}
+
+template<typename T1 = std::vector<double>, typename T2 = int, typename F= typename T1::value_type>
+std::tuple<std::vector<T1>, std::vector<std::vector<T2>>> loadOBJvf(const std::string& path) {
+	std::tuple<std::vector<T1>, std::vector<std::vector<T2>>> ret;
+	std::vector<T1>& vertices = std::get<0>(ret);
+	std::vector<std::vector<T2>>& faces = std::get<1>(ret);
+
+	gp::util::LPFile f(path);
+	vertices.reserve(f.size / 32 / 3);
+	faces.reserve(f.size / 32 / 3 * 2);
+
+	std::vector<T2> fi;
+	fi.reserve(4);
+
+	while (!f.eof()) {
+		auto s = f.curtseg();
+
+		if (s == "v") {
+			f.skipseg();
+			vertices.emplace_back(T1{ static_cast<F>(stod(f.getseg())),
+				static_cast<F>(stod(f.getseg())), static_cast<F>(stod(f.getseg())) });
+		} else if (s == "f") {
+			f.skipseg();
+		
+			fi.clear();
+			bool endl = false;
+			while (!endl) {
+				auto seg = f.getseg(endl);
+				auto left = seg.find('/');
+				int pi;
+				if (left == std::string::npos) pi = std::stoi(seg);
+				else pi = std::stoi(seg.substr(0, left));
+				pi = pi < 0 ? pi + (int)vertices.size() : pi - 1;
+				fi.emplace_back(pi);
 			}
+			faces.emplace_back(fi);
+		} else {
+			f.skipline();
 		}
-		return indices;
 	}
 
-	template <typename T>
-	std::vector<std::vector<uint32_t>> indices2faces(const T& indices) {
-		std::vector<std::vector<uint32_t>> faces;
-		faces.resize(indices.size() / 3, std::vector<uint32_t>(3));
-		for (size_t i = 0, t = 0; i < indices.size(); i += 3, t++) {
-			faces[t] = { indices[i], indices[i + 1], indices[i + 2] };
-		}
-		return faces;
-	}
+	return ret;
 
-	template<typename T1 = std::vector<double>, typename T2 = std::vector<int>>
-	std::tuple<std::vector<T1>, std::vector<T2>> loadOFF(const std::string & path) {
-		std::vector<T1> vertices;
-		std::vector<T2> indices;
+	//// old version
+	/*
+	std::ifstream f(path, std::ios::ate);
+	if (f.fail()) { std::cerr << "Failed to open file" << std::endl;  exit(1); };
 
-		size_t numVerts = -1, numFaces = -1;
+	size_t fsize = (size_t)f.tellg();
+	f.seekg(0);
+	std::vector<char> text(fsize);
 
-		std::ifstream f(path, std::ios::ate);
-		if (f.fail()) { std::cout << "Failed to open file" << std::endl;  exit(1); };
+	f.read(text.data(), fsize);
+	f.close();
 
-		size_t fsize = (size_t)f.tellg();
-		f.seekg(0);
-		std::vector<char> text(fsize);
+	size_t seek = 0;
+	std::string line = "";
+	line.reserve(200);
+	std::vector<std::string> sline;
+	sline.reserve(4);
 
-		f.read(text.data(), fsize);
-		f.close();
+	std::vector<T2> fi; fi.reserve(3);
 
-		size_t seek = 0;
-		std::string line = "";
-		line.reserve(200);
-		std::vector<std::string> sline; 
-		sline.reserve(4);
-
-		while (seek < fsize) {
-			size_t i = (seek != 0);
-			line.clear();
-			sline.clear();
-
-			while (seek < fsize && text[seek] != '\n') {
-				if (text[seek] == ' ' || text[seek] == '	') {
-					if (line != "") sline.emplace_back(line);
-					line = "";
-				} else {
-					line += text[seek];
-				}
-				seek++;
-			}
-
-			if (line != "") sline.emplace_back(line);
-			seek++;
-
-			if (sline.size() < 3 || sline[0] == "#") continue;
-
-			if (numVerts == -1 && numFaces == -1) {
-				numVerts = stoi(sline[0]), numFaces = stoi(sline[1]);
-				vertices.reserve(numVerts);
-				indices.reserve(numFaces);
+	while (seek < fsize) {
+		line.clear();
+		sline.clear();
+		while (seek < fsize && text[seek] != '\n') {
+			if (text[seek] == ' ' || text[seek] == '	') {
+				if (line != "") sline.emplace_back(line);
+				line = "";
 			} else {
-				if (sline.size() == 3) {
-					vertices.emplace_back(T1{ stod(sline[0]), stod(sline[1]), stod(sline[2]) });
-				} else {
-					indices.emplace_back(T2(stoi(sline[0])));
-					for (size_t t = 0; t < stoi(sline[0]); t++)
-						indices.back()[t] = stoi(sline[t + 1]);
-				}
+				line += text[seek];
 			}
-		}
-		return { vertices, indices };
-	}
-
-	template<typename T>
-	void loadVert(const std::string& path, T& vertices) {
-		std::ifstream f(path, std::ios::ate);
-		if (f.fail()) std::cout << "failed to open file : " << path << std::endl;
-
-		size_t fsize = (size_t)f.tellg();
-		f.seekg(0);
-		std::vector<char> text(fsize);
-
-		f.read(text.data(), fsize);
-		f.close();
-
-		uint32_t seek = 0;
-		std::string line = "";
-		line.reserve(200);
-		while (seek < fsize) {
-			uint32_t i = (seek != 0);
-			line.clear();
-			std::vector<double> v; v.reserve(3);
-
-			while (seek + i < fsize && text[seek + i] != '\n') {
-				if (text[seek + i] == ' ') {
-					v.emplace_back(stod(line));
-					line = "";
-				} else {
-					line += text[seek + i];
-				}
-				i++;
-			}
-
-			seek += i;
-			try {
-				v.emplace_back(stod(line));
-			} catch (std::invalid_argument& e) {
-				continue;
-			}
-			vertices.emplace_back({ v[0], v[1], v[2] });
-		}
-	}
-
-	template<typename T>
-	void loadTri(const std::string& path, T& indices, const int offset = 0) {
-		std::ifstream f(path, std::ios::ate);
-		if (f.fail()) std::cout << "failed to open file : " << path << std::endl;
-		size_t fsize = (size_t)f.tellg();
-		f.seekg(0);
-		std::vector<char> text(fsize);
-
-		f.read(text.data(), fsize);
-		f.close();
-
-		uint32_t seek = 0;
-		std::string line = "";
-		line.reserve(200);
-		while (seek < fsize) {
-			uint32_t i = (seek != 0);
-			line.clear();
-			std::vector<int> v; v.reserve(3);
-
-			while (seek + i < fsize && text[seek + i] != '\n') {
-				if (text[seek + i] == ' ') {
-					v.emplace_back(stoi(line) - offset);
-					line = "";
-				}
-				line += text[seek + i];
-				i++;
-			}
-			seek += i;
-			try {
-				v.emplace_back(stoi(line) - offset);
-			} catch (std::invalid_argument& e) {
-				continue;
-			}
-			indices.emplace_back({ v[0], v[1], v[2] });
-		}
-	}
-
-	template<typename T1 = std::vector<double>, typename T2 = int, typename F= typename T1::value_type>
-	std::tuple<std::vector<T1>, std::vector<std::vector<T2>>> loadOBJvf(const std::string path) {
-		std::vector<T1> vertices;
-		std::vector<std::vector<T2>> faces;
-
-		std::ifstream f(path, std::ios::ate);
-		if (f.fail()) { std::cerr << "Failed to open file" << std::endl;  exit(1); };
-
-		size_t fsize = (size_t)f.tellg();
-		f.seekg(0);
-		std::vector<char> text(fsize);
-
-		f.read(text.data(), fsize);
-		f.close();
-	
-		size_t seek = 0;
-		std::string line = "";
-		line.reserve(200);
-		std::vector<std::string> sline; 
-		sline.reserve(4);
-
-		while (seek < fsize) {
-			line.clear();
-			sline.clear();
-			while (seek < fsize && text[seek] != '\n') {
-				if (text[seek] == ' ' || text[seek] == '	') {
-					if (line != "") sline.emplace_back(line);
-					line = "";
-				} else {
-					line += text[seek];
-				}
-				seek++;
-			}
-
-			if (line != "") sline.emplace_back(line);
 			seek++;
-
-			if (sline.size() < 2 || sline[0][0] == '#') continue;
-
-			if (sline[0] == "v") {
-				vertices.emplace_back(T1{(F)stod(sline[1]), (F)stod(sline[2]), (F)stod(sline[3]) });
-			} else if (sline[0] == "f") {
-				std::vector<T2> f; f.reserve(3);
-
-				for (size_t i = 1; i < sline.size(); i++) {
-					auto left = sline[i].find('/');
-					int pi;
-
-					if (left == std::string::npos) pi = stoi(sline[i]);
-					else 	pi = stoi(sline[i].substr(0, left));
-					pi = pi < 0 ? pi + (int)vertices.size() : pi - 1;
-
-					f.emplace_back(pi);
-				}
-				faces.emplace_back(f);
-			}
 		}
 
-		return { vertices, faces };
+		if (line != "") sline.emplace_back(line);
+		seek++;
+
+		if (sline.size() < 2 || sline[0][0] == '#') continue;
+
+		if (sline[0] == "v") {
+			vertices.emplace_back(T1{ static_cast<F>(stod(sline[1])),
+				static_cast<F>(stod(sline[2])), static_cast<F>(stod(sline[3])) });
+		} else if (sline[0] == "f") {
+			fi.clear();
+
+			for (size_t i = 1; i < sline.size(); i++) {
+				auto left = sline[i].find('/');
+				int pi;
+
+				if (left == std::string::npos) pi = atoi(sline[i].data());
+				else 	pi = atoi(sline[i].substr(0, left).data());
+				pi = pi < 0 ? pi + (int)vertices.size() : pi - 1;
+
+				fi.emplace_back(pi);
+			}
+			faces.emplace_back(fi);
+		}
 	}
 
-	template<typename T1 = std::vector<double>, typename T2 = int, typename F= typename T1::value_type>
-	std::tuple<std::vector<T1>,
-		std::vector<std::vector<T2>>,
-		std::vector<T1>> loadOBJvfn(const std::string path) {
+	return ret;
+	*/
+}
 
-		std::vector<T1> vertices;
-		std::vector<std::vector<T2>> faces;
-		std::vector<T1> vnormals;
+template<typename T1, typename T2>
+void saveOBJ(std::string_view saveName, const T1& vertices, const T2& faces) {
+	std::ofstream f(saveName.data());
+	std::string wr = "";
 
-		std::vector<T1> normals;
-
-		std::ifstream f(path, std::ios::ate);
-		if (f.fail()) { std::cerr << "Failed to open file" << std::endl;  exit(1); };
-
-		size_t fsize = (size_t)f.tellg();
-		f.seekg(0);
-		std::vector<char> text(fsize);
-
-		f.read(text.data(), fsize);
-		f.close();
-
-		size_t seek = 0;
-		std::string line = "";
-		line.reserve(200);
-		std::vector<std::string> sline; 
-		sline.reserve(4);
-
-		while (seek < fsize) {
-			line.clear();
-			sline.clear();
-			while (seek < fsize && text[seek] != '\n') {
-				if (text[seek] == ' ' || text[seek] == '	') {
-					if (line != "") sline.emplace_back(line);
-					line = "";
-				} else {
-					line += text[seek];
-				}
-				seek++;
-			}
-
-			if (line != "") sline.emplace_back(line);
-			seek++;
-
-			if (sline.size() < 2 || sline[0][0] == '#') continue;
-
-			if (sline[0] == "v") {
-				vertices.emplace_back(T1{ (F)stod(sline[1]), (F)stod(sline[2]), (F)stod(sline[3]) });
-				vnormals.emplace_back(T1{ 0., 0., 0. });
-			} else if (sline[0] == "vn") {
-				normals.emplace_back(T1{ (F)stod(sline[1]), (F)stod(sline[2]), (F)stod(sline[3]) });
-			} else if (sline[0] == "f") {
-				std::vector<T2> f; f.reserve(3);
-
-				for (size_t i = 1; i < sline.size(); i++) {
-					auto left = sline[i].find('/');
-					int pi, ni = -1;
-
-					if (left == std::string::npos) {
-						pi = stoi(sline[i]);
-
-					} else {
-						auto right = sline[i].rfind('/');
-						auto s0 = sline[i].substr(0, left);
-						auto s2 = sline[i].substr(right + 1, sline[i].length() - right);
-
-						pi = stoi(s0);
-
-						if (s2 != "") {
-							ni = stoi(s2);
-							ni = ni < 0 ? ni + (int)normals.size() : ni - 1;
-						}
-					}
-					pi = pi < 0 ? pi + (int)vertices.size() : pi - 1;
-
-					f.emplace_back(pi);
-					if (ni != -1) {
-						vnormals[pi][0] += normals[ni][0];
-						vnormals[pi][1] += normals[ni][1];
-						vnormals[pi][2] += normals[ni][2];
-					}
-				}
-				faces.emplace_back(f);
-			}
-		}
-		return { vertices, faces, vnormals };
-	}
-
-	template<typename T1 = std::vector<double>, typename T2 = std::vector<double>, typename T3 = int, typename F= typename T1::value_type>
-	std::tuple<std::vector<T1>,
-		std::vector<std::vector<T3>>,
-		std::vector<T2>> loadOBJvft(const std::string path) {
-
-		std::vector<T1> vertices;
-		std::vector<std::vector<T3>> faces;
-		std::vector<T2> vtexcoords;
-
-		std::vector<T1> positions;
-		std::vector<T2> texcoords;
-		std::map<std::pair<int, int>, size_t> uniqueVerts;
-		size_t index = 0;
-
-		std::ifstream f(path, std::ios::ate);
-		if (f.fail()) { std::cerr << "Failed to open file" << std::endl;  exit(1); };
-
-		size_t fsize = (size_t)f.tellg();
-		f.seekg(0);
-		std::vector<char> text(fsize);
-
-		f.read(text.data(), fsize);
-		f.close();
-
-		size_t seek = 0;
-		std::string line = "";
-		line.reserve(200);
-		std::vector<std::string> sline;
-		sline.reserve(4);
-
-		while (seek < fsize) {
-			line.clear();
-			sline.clear();
-
-			while (seek < fsize && text[seek] != '\n') {
-				if (text[seek] == ' ' || text[seek] == '	') {
-					if (line != "") sline.emplace_back(line);
-					line = "";
-				} else {
-					line += text[seek];
-				}
-				seek++;
-			}
-
-			if (line != "") sline.emplace_back(line);
-			seek++;
-
-			if (sline.size() < 2 || sline[0][0] == '#') continue;
-
-			if (sline[0] == "v") {
-				positions.emplace_back(T1{ (F)stod(sline[1]), (F)stod(sline[2]), (F)stod(sline[3]) });
-			} else if (sline[0] == "vt") {
-				texcoords.emplace_back(T2{ (F)stod(sline[1]), (F)stod(sline[2]) });
-			} else if (sline[0] == "f") {
-				std::vector<T3> f; f.reserve(3);
-
-				for (size_t i = 1; i < sline.size(); i++) {
-					auto left = sline[i].find('/');
-					int pi, ti = -1;
-
-					if (left == std::string::npos) {
-						pi = stoi(sline[i]);
-
-					} else {
-						auto right = sline[i].rfind('/');
-						auto s0 = sline[i].substr(0, left);
-						auto s1 = sline[i].substr(left + 1, right - left - 1);
-
-						pi = stoi(s0);
-
-						if (s1 != "") {
-							ti = stoi(s1);
-							ti = ti < 0 ? ti + (int)texcoords.size() : ti - 1;
-						}
-					}
-					pi = pi < 0 ? pi + (int)positions.size() : pi - 1;
-
-					if (uniqueVerts.count({ pi, ti }) != 0) {
-						f.emplace_back(uniqueVerts[{ pi, ti }]);
-					} else {
-						uniqueVerts[{ pi, ti }] = index;
-						f.emplace_back(index++);
-						vertices.emplace_back(positions[pi]);
-						vtexcoords.emplace_back(ti < 0 ? T2({ 0.0, 0.0 }) : texcoords[ti]);
-					}
-				}
-				faces.emplace_back(f);
-			}
-		}
-
-		return { vertices, faces, vtexcoords };
-	}
-
-	template<typename T1 = std::vector<double>, typename T2 = std::vector<double>, typename T3 = int, typename F= typename T1::value_type>
-	std::tuple<std::vector<T1>,
-		std::vector<std::vector<T3>>,
-		std::vector<T1>,
-		std::vector<T2>> loadOBJvfnt(const std::string path) {
-
-		std::vector<T1> vertices;
-		std::vector<std::vector<T3>> faces;
-		std::vector<T1> vnormals;
-		std::vector<T2> vtexcoords;
-
-		std::vector<T1> positions;
-		std::vector<T1> normals;
-		std::vector<T2> texcoords;
-		std::map<std::tuple<int, int>, size_t> uniqueVerts;
-		size_t index = 0;
-
-		std::ifstream f(path, std::ios::ate);
-		if (f.fail()) { std::cerr << "Failed to open file" << std::endl;  exit(1); };
-
-		size_t fsize = (size_t)f.tellg();
-		f.seekg(0);
-		std::vector<char> text(fsize);
-
-		f.read(text.data(), fsize);
-		f.close();
-
-		size_t seek = 0;
-		std::string line = "";
-		line.reserve(200);
-		std::vector<std::string> sline;
-		sline.reserve(4);
-
-		while (seek < fsize) {
-			line.clear();
-			sline.clear();
-			while (seek < fsize && text[seek] != '\n') {
-				if (text[seek] == ' ' || text[seek] == '	') {
-					if (line != "") sline.emplace_back(line);
-					line = "";
-				} else {
-					line += text[seek];
-				}
-				seek++;
-			}
-
-			if (line != "") sline.emplace_back(line);
-			seek++;
-
-			if (sline.size() < 2 || sline[0][0] == '#') continue;
-
-			if (sline[0] == "v") {
-				positions.emplace_back(T1{ (F)stod(sline[1]), (F)stod(sline[2]), (F)stod(sline[3]) });
-			} else if (sline[0] == "vt") {
-				texcoords.emplace_back(T2{ (F)stod(sline[1]), (F)stod(sline[2]) });
-			} else if (sline[0] == "vn") {
-				normals.emplace_back(T1{ (F)stod(sline[1]), (F)stod(sline[2]), (F)stod(sline[3]) });
-			} else if (sline[0] == "f") {
-				std::vector<T3> f; f.reserve(3);
-
-				for (size_t i = 1; i < sline.size(); i++) {
-					auto left = sline[i].find('/');
-					int pi, ti = -1, ni = -1;
-
-					if (left == std::string::npos) {
-						pi = stoi(sline[i]);
-
-					} else {
-						auto right = sline[i].rfind('/');
-						auto s0 = sline[i].substr(0, left);
-						auto s1 = sline[i].substr(left + 1, right - left - 1);
-						auto s2 = sline[i].substr(right + 1, sline[i].length() - right);
-
-						pi = stoi(s0);
-
-						if (s1 != "") {
-							ti = stoi(s1);
-							ti = ti < 0 ? ti + (int)texcoords.size() : ti - 1;
-						}
-						if (s2 != "") {
-							ni = stoi(s2);
-							ni = ni < 0 ? ni + (int)normals.size() : ni - 1;
-						}
-					}
-					pi = pi < 0 ? pi + (int)positions.size() : pi - 1;
-
-					if (uniqueVerts.count({ pi, ti }) != 0) {
-						size_t idx = uniqueVerts[{ pi, ti }];
-						f.emplace_back((T3)idx);
-						if (ni != -1) {
-							vnormals[idx][0] += normals[ni][0];
-							vnormals[idx][1] += normals[ni][1];
-							vnormals[idx][2] += normals[ni][2];
-						}
-					} else {
-						uniqueVerts[{ pi, ti }] = index;
-						f.emplace_back((T3)index++);
-						vertices.emplace_back(positions[pi]);
-						vtexcoords.emplace_back(ti < 0 ? T2({ 0.0, 0.0 }) : texcoords[ti]);
-						vnormals.emplace_back(ni < 0 ? T1({ 0.0, 0.0, 0.0 }) : normals[ni]);
-					}
-				}
-				faces.emplace_back(f);
-			}
-		}
-
-		return { vertices, faces, vnormals, vtexcoords };
-	}
-
-	template<typename T1, typename T2>
-	void saveOBJ(std::string_view saveName, const T1& vertices, const T2& faces) {
-		std::ofstream f(saveName.data());
-		std::string wr = "";
-
-		for (auto& v : vertices) {
-			wr += std::string("v " + std::to_string(v[0]) + " " + std::to_string(v[1]) + " " + std::to_string(v[2]) + "\n");
-		}
-		for (auto& face : faces) {
-			wr += std::string("f " + 
-												std::to_string(face[0] + 1) + " " + 
-												std::to_string(face[1] + 1) + " " + 
-												std::to_string(face[2] + 1) + "\n");
-		}
-		f << wr;
-		f.close();
-	}
-
-	template<typename T1, typename T2>
-	void saveOBJev(std::string_view saveName, const T1& vertices, const T2& faces) {
-		std::ofstream f(saveName.data());
-		std::string wr = "";
-
-		for (size_t i = 0; i < (size_t)vertices.rows(); i++) {
+	if constexpr (impl::IsEigen<T1>::value) {
+		wr.reserve(vertices.rows());
+		for (int i = 0; i < vertices.rows(); i++) {
 			wr += std::string("v " + std::to_string(vertices(i, 0)) + " " + std::to_string(vertices(i, 1)) + " " + std::to_string(vertices(i, 2)) + "\n");
 		}
-		for (auto& face : faces) {
-			wr += std::string("f " +
-				std::to_string(face[0] + 1) + " " +
-				std::to_string(face[1] + 1) + " " +
-				std::to_string(face[2] + 1) + "\n");
+	} else if constexpr (impl::IsStdvec2d<T1>::value) {
+		wr.reserve(vertices.size());
+		for (size_t i = 0; i < vertices.size(); i++) {
+			wr += std::string("v " + std::to_string(vertices[i][0]) + " " + std::to_string(vertices[i][1]) + " " + std::to_string(vertices[i][2]) + "\n");
 		}
-		f << wr;
-		f.close();
+	} else {
+		wr.reserve(vertices.size() * 3);
+		for (size_t i = 0; i < vertices.size(); i+=3) {
+			wr += std::string("v " + std::to_string(vertices[i+0]) + " " + std::to_string(vertices[i+1]) + " " + std::to_string(vertices[i+2]) + "\n");
+		}
 	}
 
-	template<typename T1, typename T2>
-	void saveOBJind(std::string_view saveName, const T1& vertices, const T2& indices) {
-		std::ofstream f(saveName.data());
-		std::string wr = "";
-
-		for (auto& v : vertices) {
-			wr += std::string("v " + std::to_string(v[0]) + " " + std::to_string(v[1]) + " " + std::to_string(v[2]) + "\n");
+	if constexpr (impl::IsEigen<T2>::value) {
+		wr.reserve(faces.rows());
+		for (int i = 0; i < faces.rows(); i++) {
+			wr += std::string("f " + std::to_string(faces(i, 0)+1) + " " + std::to_string(faces(i, 1)+1) + " " + std::to_string(faces(i, 2)+1) + "\n");
 		}
-		for (size_t i = 0; i < indices.size(); i+=3) {
-			wr += std::string("f " +
-				std::to_string(indices[i + 0] + 1) + " " +
-				std::to_string(indices[i + 1] + 1) + " " +
-				std::to_string(indices[i + 2] + 1) + "\n");
+	} else if constexpr (impl::IsStdvec2d<T2>::value) {
+		wr.reserve(faces.size());
+		for (size_t i = 0; i < faces.size(); i++) {
+			wr += "f ";
+			for (size_t j = 0; j < faces[i].size(); j++)
+				wr += std::to_string(faces[i][j]+1) + (j + 1 != faces[i].size() ? " " : "\n");
 		}
-		f << wr;
-		f.close();
+	} else {
+		wr.reserve(faces.size() * 3);
+		for (size_t i = 0; i < faces.size(); i+=3) {
+			wr += std::string("f " + std::to_string(faces[i+0]+1) + " " + std::to_string(faces[i+1]+1) + " " + std::to_string(faces[i+2]+1) + "\n");
+		}
 	}
+	
+	f << wr;
+	f.close();
+}
 
-	template<typename T1>
-	static void saveVert(const std::string& fileName, std::vector<T1>& vertices) {
-		std::ofstream f(fileName);
-		std::string wr = "";
-
-		for (int i = 0; i < vertices.size(); i++) {
-			wr += std::string("v " + to_string(vertices[i][0]) + " " + to_string(vertices[i][1]) + " " + to_string(vertices[i][2]) + "\n");
-		}
-
-		f << wr;
-		f.close();
-	}
-
-	template<typename T1>
-	static void saveVertMP(const std::string& fileName, std::vector<T1>& vertices, const uint32_t numThreads = 8) {
-		std::ofstream f(fileName);
-		std::vector<std::string> wr(numThreads, "");
-
-		const int th_num_verts = vertices.size() / numThreads;
-
-		omp_set_num_threads(numThreads);
-		#pragma omp parallel for
-		for (int i = 0; i < numThreads; i++) {
-			for (int j = th_num_verts * i; j < th_num_verts * (i + 1); j++) {
-				wr[i] += to_string(vertices[j][0]) + " " + to_string(vertices[j][1]) + " " + to_string(vertices[j][2]) + "\n";
-			}
-		}
-
-		for (int j = th_num_verts * numThreads; j < vertices.size(); j++) {
-			wr[0] += to_string(vertices[j][0]) + " " + to_string(vertices[j][1]) + " " + to_string(vertices[j][2]) + "\n";
-		}
-
-		for (int i = 0; i < numThreads; i++) {
-			f << wr[i];
-		}
-
-		f.close();
-	}
-
-	template<typename T1, typename T2>
-	static void saveTriOBJ(const std::string& fileName, std::vector<T1>& vertices, std::vector<T2>& indices) {
-		std::ofstream f(fileName);
-		std::string wr = "";
-
-		for (auto& v : vertices)
-			wr += "v " + to_string(v[0]) + " " + to_string(v[1]) + " " + to_string(v[2]) + "\n";
-
-		for (auto& idx : indices)
-			wr += "f " + to_string(idx[0] + 1) + " " + to_string(idx[1] + 1) + " " + to_string(idx[2] + 1) + "\n";
-
-		f << wr;
-		f.close();
-	}
-
-};
+}

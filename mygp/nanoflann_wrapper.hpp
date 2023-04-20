@@ -83,5 +83,10 @@ public:
 			getRNearestNeighbor(pts.row(i), r, indicesDists[i]);
 		}
 	}
+
+	static std::vector<size_t> nearestNeighbors(const Eigen::MatrixXf& src, const Eigen::MatrixXf& trg, const int maxLeaf = 10) {
+		auto tree = NanoFlannKNN(src, maxLeaf);
+		return tree.getNearestNeighbors(trg);
+	}
 };
 }

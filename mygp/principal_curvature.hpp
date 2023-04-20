@@ -1,10 +1,9 @@
 #pragma once
+#include <queue>
 #include <mygp/halfedge_mesh.hpp>
-#include <mygp/geocore.hpp>
 
 namespace gp::curv::impl {
-	template <typename T>
-	std::vector<size_t> rRingNeighbsCache(const heds::Mesh<T>& mesh, const size_t src, const double radius, 
+	std::vector<size_t> rRingNeighbsCache(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t src, const double radius, 
 		std::vector<double>& minDist, 
 		std::vector<std::vector<uint32_t>>& oneringNeighbs) {
 		std::vector<size_t> neighbs;
@@ -21,7 +20,7 @@ namespace gp::curv::impl {
 			search.pop();
 
 			for (const auto& u : oneringNeighbs[v]) {
-				double dist = d +(mesh.getPosition<Eigen::Vector3d>(u) - mesh.getPosition<Eigen::Vector3d>(v)).norm();
+				double dist = d +(mesh.position(u) - mesh.position(v)).norm();
 				if (dist < minDist[u] && dist < radius) {
 					search.emplace(dist, u);
 					minDist[u] = dist;
@@ -37,8 +36,7 @@ namespace gp::curv::impl {
 		return neighbs;
 	}
 
-	template <typename T>
-	std::vector<size_t> kRingNeighbsCache(const heds::Mesh<T>& mesh, const size_t src, const size_t k, 
+	std::vector<size_t> kRingNeighbsCache(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t src, const size_t k,
 		std::vector<std::vector<uint32_t>>& oneringNeighbs) {
 		std::vector<size_t> neighbs;
 
@@ -66,9 +64,8 @@ namespace gp::curv::impl {
 		return neighbs;
 	}
 
-	template <typename T>
-	std::vector<size_t> decimateNeighbs(const heds::Mesh<T>& mesh, const size_t src, 
-		const std::vector<size_t>& neighbs, const Eigen::MatrixXd& normals) {
+	std::vector<size_t> decimateNeighbs(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t src,
+		const std::vector<size_t>& neighbs, const Eigen::MatrixX3d& normals) {
 		std::vector<size_t> decNeighbs;
 		decNeighbs.reserve(neighbs.size());
 		Eigen::Vector3d n = normals.row(src);
@@ -78,18 +75,16 @@ namespace gp::curv::impl {
 		return decNeighbs;
 	}
 
-	template <typename T>
-	Eigen::Vector3d averageNormal(const heds::Mesh<T>& mesh, const size_t src, 
-		const std::vector<size_t>& neighbs, const Eigen::MatrixXd& normals) {
+	Eigen::Vector3d averageNormal(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t src,
+		const std::vector<size_t>& neighbs, const Eigen::MatrixX3d& normals) {
 		Eigen::Vector3d normal = normals.row(src);
 		for (const auto i : neighbs) normal += normals.row(i);
 		return normal.normalized();
 	}
 
-	template <typename T>
-	Eigen::Matrix3d findLocalFrame(const heds::Mesh<T>& mesh, const size_t src, const Eigen::Vector3d& avgNormal) {
-		Eigen::Vector3d e = mesh.getPosition<Eigen::Vector3d>(mesh.verts[src]->oneringNeighbs()[0]->id) -
-			mesh.getPosition<Eigen::Vector3d>(src);
+	Eigen::Matrix3d findLocalFrame(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t src, const Eigen::Vector3d& avgNormal) {
+		Eigen::Vector3d e = mesh.position(mesh.verts[src]->edge->pair->vert->id) -
+			mesh.position(src);
 		Eigen::Vector3d lx = (e - e.dot(avgNormal) * avgNormal).normalized();
 		Eigen::Vector3d ly = avgNormal.cross(lx).normalized();
 
@@ -99,18 +94,17 @@ namespace gp::curv::impl {
 		lf.row(2) = avgNormal;
 		return lf;
 	}
-
-	template <typename T>
-	Eigen::Vector<double, 5> quadricFitting(const heds::Mesh<T>& mesh, const size_t src,
+	
+	Eigen::Vector<double, 5> quadricFitting(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t src,
 		const std::vector<size_t>& neighbs, const Eigen::Matrix3d& localFrame) {
 		Eigen::Vector<double, 5> quad;
 
-		Eigen::Vector3d s = mesh.getPosition<Eigen::Vector3d>(src);
+		Eigen::Vector3d s = mesh.position(src);
 		Eigen::MatrixXd A(neighbs.size(), 5);
 		Eigen::VectorXd b(neighbs.size());
 
 		for (size_t j = 0; const auto i : neighbs) {
-			Eigen::Vector3d k = mesh.getPosition<Eigen::Vector3d>(i) - s;
+			Eigen::Vector3d k = mesh.position(i) - s;
 			double u = k.dot(localFrame.row(0));
 			double v = k.dot(localFrame.row(1));
 			double n = k.dot(localFrame.row(2));
@@ -160,7 +154,7 @@ namespace gp::curv::impl {
 		dir1.normalize();
 		dir2.normalize();
 
-		if (eval[0] > eval[1])
+		if (eval[0] > eval[1]) 
 			return std::make_tuple(eval[1], eval[0], dir2, dir1);
 		return std::make_tuple(eval[0], eval[1], dir1, dir2);
 	}
@@ -172,16 +166,15 @@ namespace gp::curv {
 	/// @param radius 
 	/// @param kring 
 	/// @return minimum/maximum curvature, minimum/maximum direction.
-	template <typename T>
-	std::tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::MatrixXd, Eigen::MatrixXd> 
-		principalCurvature(const heds::Mesh<T>& mesh, const size_t radius=4, const bool kring=false) {
+	std::tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::MatrixX3d, Eigen::MatrixX3d> 
+		principalCurvature(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t radius=4, const bool kring=false) {
 		size_t n = mesh.getNumVerts();
 	
 		Eigen::VectorXd minCurvature(n), maxCurvature(n);
-		Eigen::MatrixXd minDirection(n, 3), maxDirection(n, 3);
+		Eigen::MatrixX3d minDirection(n, 3), maxDirection(n, 3);
 	
-		double mel = mesh.avgEdgeLength();
-		Eigen::MatrixXd normals = util::vertexNormals(mesh);
+		double ael = mesh.avgEdgeLength();
+		auto normals = mesh.vertexNormals();
 
 		std::vector<double> cacheDist;
 		if (!kring) cacheDist.resize(n, std::numeric_limits<double>::max());
@@ -192,7 +185,7 @@ namespace gp::curv {
 			#pragma omp for firstprivate(cacheDist)
 			for (int i = 0; i < n; i++) {
 				std::vector<size_t> neighbs;
-				if (!kring) neighbs = impl::rRingNeighbsCache(mesh, i, mel * radius, cacheDist, oneringNeighbs);
+				if (!kring) neighbs = impl::rRingNeighbsCache(mesh, i, ael * radius, cacheDist, oneringNeighbs);
 				if (kring || neighbs.size() < 6) neighbs = impl::kRingNeighbsCache(mesh, i, radius, oneringNeighbs);
 				neighbs = impl::decimateNeighbs(mesh, i, neighbs, normals);
 

@@ -5,13 +5,13 @@
 #include <unordered_set>
 
 #include <mygp/geoutil.hpp>
+#include <mygp/union_find.hpp>
 #include <mygp/halfedge_mesh.hpp>
 #include <mygp/distance.hpp>
-#include <mygp/eigenutil.hpp>
-#include <mygp/geocore.hpp>
+#include <mygp/eigutil.hpp>
 
 namespace gp::topo::impl {
-std::vector<size_t> getPathToSource(const std::vector<std::pair<size_t, double>>& shortestPathTree, const size_t from) {
+inline std::vector<size_t> getPathToSource(const std::vector<std::pair<size_t, double>>& shortestPathTree, const size_t from) {
 	std::vector<size_t> path ={ from };
 	size_t i = from;
 	while (i != shortestPathTree[i].first) {
@@ -21,7 +21,7 @@ std::vector<size_t> getPathToSource(const std::vector<std::pair<size_t, double>>
 	return path;
 }
 
-std::pair<std::vector<size_t>, double> getPathDistToSource(const std::vector<std::pair<size_t, double>>& shortestPathTree, const size_t from) {
+inline std::pair<std::vector<size_t>, double> getPathDistToSource(const std::vector<std::pair<size_t, double>>& shortestPathTree, const size_t from) {
 	std::vector<size_t> path ={ from };
 	double dist = 0.0;
 	size_t i = from;
@@ -33,16 +33,17 @@ std::pair<std::vector<size_t>, double> getPathDistToSource(const std::vector<std
 	return std::make_pair(path, dist);
 }
 
+// check the number of genus on separated mesh (there is one boundary at least)
 template <typename T>
 int countNumGenus(const heds::Mesh<T>& mesh, const std::vector<bool>& mask) {
-	int v = 0, e = 0, f = 0, b = 1;
+	int v = 0, e = 0, f = 0, b = 1; // b = 1 ? 
 
 	for (size_t i = 0; i < mask.size(); i++) v += mask[i];
 
 	for (const auto& face : mesh.faces) {
 		bool flag = true;
-		for (const auto& vert : face->adjacentVerts()) {
-			if (!mask[vert->id]) {
+		for (const auto& vert : face->adjacentVindex()) {
+			if (!mask[vert]) {
 				flag = false;
 				break;
 			}
@@ -51,8 +52,8 @@ int countNumGenus(const heds::Mesh<T>& mesh, const std::vector<bool>& mask) {
 		if (flag) f++;
 	}
 
-	for (const auto& emap : mesh.edges)
-		if (mask[emap.first.first] && mask[emap.first.second]) e++;
+	for (const auto& edge : mesh.edges)
+		if (mask[edge->vert->id] && mask[edge->pair->vert->id]) e++;
 
 	return -((v - e + f) - 2 + b) / 2;
 }
@@ -88,11 +89,11 @@ bool isNonSeparation(const heds::Mesh<T>& mesh, const std::vector<size_t>& cycle
 		auto i = queue.back();
 		queue.pop_back();
 
-		for (const auto& v : mesh.verts[i]->oneringNeighbs()) {
-			if (surfaceGroup[v->id] != 0 && (surfaceGroup[v->id] != surfaceGroup[i])) return true;
-			if (surfaceGroup[v->id] == 0 && !cycleIdx.contains(v->id)) {
-				surfaceGroup[v->id] = surfaceGroup[i];
-				queue.emplace_back(v->id);
+		for (const auto& v : mesh.verts[i]->oneringVindex()) {
+			if (surfaceGroup[v] != 0 && (surfaceGroup[v] != surfaceGroup[i])) return true;
+			if (surfaceGroup[v] == 0 && !cycleIdx.contains(v)) {
+				surfaceGroup[v] = surfaceGroup[i];
+				queue.emplace_back(v);
 			}
 		}
 	}
@@ -131,11 +132,11 @@ bool isNonContraction(const heds::Mesh<T>& mesh, const std::vector<size_t>& cycl
 		auto i = queue.back();
 		queue.pop_back();
 
-		for (const auto& v : mesh.verts[i]->oneringNeighbs()) {
-			if (surfaceGroup[v->id] != 0 && (surfaceGroup[v->id] != surfaceGroup[i])) return true;
-			if (surfaceGroup[v->id] == 0 && !cycleIdx.contains(v->id)) {
-				surfaceGroup[v->id] = surfaceGroup[i];
-				queue.emplace_back(v->id);
+		for (const auto& v : mesh.verts[i]->oneringVindex()) {
+			if (surfaceGroup[v] != 0 && (surfaceGroup[v] != surfaceGroup[i])) return true;
+			if (surfaceGroup[v] == 0 && !cycleIdx.contains(v)) {
+				surfaceGroup[v] = surfaceGroup[i];
+				queue.emplace_back(v);
 			}
 		}
 	}
@@ -155,7 +156,7 @@ bool isNonContraction(const heds::Mesh<T>& mesh, const std::vector<size_t>& cycl
 	return true;
 }
 
-void gaussJordanElimZ2(Eigen::Matrix<bool, -1, -1>& mat, const bool pb = false) {
+inline void gaussJordanElimZ2(Eigen::Matrix<bool, -1, -1>& mat, const bool pb = false) {
 	auto rows = mat.rows(), cols = mat.cols();
 
 	if (pb) std::cout << "gauss-jordan" << std::endl;
@@ -181,10 +182,11 @@ void gaussJordanElimZ2(Eigen::Matrix<bool, -1, -1>& mat, const bool pb = false) 
 		i++;
 	}
 	if (pb) std::cout << std::endl;
-
 }
 
-std::vector<std::vector<size_t>> cycleExtraction(const size_t n, const std::vector<std::vector<size_t>>& adjacentList, const std::vector<heds::eKey>& bridges) {
+inline std::vector<std::vector<size_t>> cycleExtraction(const std::vector<std::vector<size_t>>& adjacentList, const std::vector<std::pair<size_t, size_t>>& bridges) {
+	size_t n = adjacentList.size();
+
 	std::vector<std::vector<size_t>> cycles;
 	for (size_t i = 0; i < bridges.size(); i++) {
 		auto [s, t] = bridges[i];
@@ -250,8 +252,8 @@ std::vector<std::vector<size_t>> minimumCycleCandidates(
 		for (size_t i = 0; i < paths.size(); i++)
 			paths[i] = impl::getPathToSource(shortestPathTree, i);
 
-		for (const auto& emap : mesh.edges) {
-			size_t u = emap.second->pair->vert->id, v = emap.second->vert->id;
+		for (const auto& edge : mesh.edges) {
+			auto [u, v] = edge->endpointIndex();
 
 			if (u == source || v == source) continue;
 
@@ -323,25 +325,12 @@ std::vector<std::vector<size_t>> minimumCycleBasis(
 	auto cycles = minimumCycleCandidates(mesh, option, pb);
 	sortCycleCandidates(cycles, mesh);
 
-	std::vector<heds::eKey> edgeKeys;
-	edgeKeys.reserve(mesh.getNumEdges());
-	for (const auto& emap : mesh.edges) edgeKeys.emplace_back(emap.first);
-
-	std::unordered_map<heds::eKey, size_t, heds::eKeyHash> edges;
-	edges.reserve(edgeKeys.size());
-	for (size_t i = 0; i < edgeKeys.size(); i++) edges[edgeKeys[i]] = i;
-
 	Eigen::Matrix<bool, -1, -1> E= 
-		Eigen::Matrix<bool, -1, -1>::Zero(edgeKeys.size(), cycles.size());
+		Eigen::Matrix<bool, -1, -1>::Zero(mesh.getNumEdges(), cycles.size());
 	for (size_t i = 0; i < cycles.size(); i++) {
 		for (size_t j = 0, k = cycles[i].size(); j < k; j++) {
 			uint32_t u = (uint32_t)cycles[i][j], v = (uint32_t)cycles[i][(j+1)%k];
-	
-			if (edges.contains(heds::eKey(u, v))) {
-				E(edges.at(heds::eKey(u, v)), i) = true;
-			} else {
-				E(edges.at(heds::eKey(v, u)), i) = true;
-			}
+			E(mesh.halfedge(u, v)->id/2, i) = true;
 		}
 	}
 	
@@ -358,23 +347,36 @@ std::vector<std::vector<size_t>> minimumCycleBasis(
 	return basis;
 }
 
-template <typename T=double>
-std::vector<size_t> kruskalSpanningTree(const size_t n,
-	const std::vector<std::pair<uint32_t, uint32_t>>& edges,
-	std::vector<T> weights={}) {
+// compute minimum spanning tree (kruskal algorithm).
+// 
+// @param mesh
+// @param weights : sort weights ({} no sort)
+// @param mask    : use edge mask ({} all edge evaluate)
+template <typename T1, typename T2 = double, typename T3 = bool>
+std::vector<size_t> kruskalSpanningTree(const heds::Mesh<T1>& mesh, const std::vector<T2>& weights={}, 
+	const std::vector<T3>& mask={}) {
+	size_t n = mesh.getNumVerts();
+
 	util::UnionFind uf(n);
 
-	if (weights.size() != edges.size()) weights.resize(edges.size(), 1.0);
-	std::vector<size_t> index(edges.size());
-	std::iota(index.begin(), index.end(), 0);
-	std::sort(index.begin(), index.end(), [weights](auto& l, auto& r) { return weights[l] < weights[r]; });
+	std::vector<size_t> index;
+	if (mask.size()) {
+		index.reserve(mesh.getNumEdges());
+		for (size_t i = 0; i < mesh.getNumEdges(); i++) if (mask[i]) index.emplace_back(i);
+	} else {
+		index.resize(mesh.edges.size());
+		std::iota(index.begin(), index.end(), 0);
+	}
+
+	if (weights.size()) {
+		std::sort(index.begin(), index.end(), [weights](auto& l, auto& r) { return weights[l] < weights [r] ; });
+	}
 
 	std::vector<size_t> mst;
 	mst.reserve(n-1);
 
 	for (const auto i : index) {
-		size_t u = edges[i].first;
-		size_t v = edges[i].second;
+		auto [u, v] = mesh.edges[i]->endpointIndex();
 
 		if (!uf.same(u, v)) {
 			uf.unite(u, v);
@@ -387,66 +389,76 @@ std::vector<size_t> kruskalSpanningTree(const size_t n,
 }
 
 // compute tree cotree decomposition.
+// 
+// WARNING : (primal cycle version) this code does not concerned about a mesh such that has boundary or disconnected graph.
 // @return cycles (vertex list) v_1 -> v_2 -> ... -> v_n
+// @boundary : include boundary cycles (return dual cycle)
 template <typename T>
-std::vector<std::vector<size_t>> treeCotreeDecomp(const heds::Mesh<T>& mesh) {
-	//---------- prepare primal mst ----------
-	std::vector<heds::eKey> tree;
-	tree.reserve(mesh.getNumEdges());
-	std::vector<double> edgeLengths;
-	edgeLengths.reserve(mesh.getNumEdges());
-	for (const auto& emap : mesh.edges) {
-		tree.emplace_back(emap.first);
-		edgeLengths.emplace_back(mesh.length(emap.second));
-	}
+std::vector<std::vector<size_t>> treeCotreeDecomp(const heds::Mesh<T>& mesh, 
+	const bool dualCycle = false, const bool boundary = false) {
+	if (boundary == true && dualCycle == false) 
+		throw std::runtime_error("Tree-Cotree : boundary cycle can only return cycle ver.");
 
-	auto primMst = kruskalSpanningTree(mesh.getNumVerts(), tree, edgeLengths);
+	//---------- prepare primal mst ----------
+	
+	std::vector<bool> bmask(mesh.getNumEdges(), true);
+	if (dualCycle && boundary) 
+		for (const auto& e : mesh.edges) 
+		if (e->vert->isBoundary() || e->pair->vert->isBoundary()) bmask[e->id/2] = false;
+
+	auto primMst = kruskalSpanningTree(mesh, {}, bmask);
 
 	std::vector<bool> inPrimMst(mesh.getNumEdges(), false);
 	for (const auto i : primMst) inPrimMst[i] = true;
 
 	//---------- construct dual mesh ----------
-	auto [dP, dF] = util::dualMesh(mesh);
-	heds::Mesh<Eigen::MatrixXd> dmesh(dP, dF);
+	auto [dverts, dfaces] = mesh.dual();
+	heds::Mesh<T> dmesh(dverts, dfaces);
 
 	//---------- compute cotree ----------
-	std::vector<heds::eKey> cotree;
-	cotree.reserve(dmesh.getNumEdges());
-	edgeLengths.clear();
+	std::vector<bool> cotree(dmesh.getNumEdges(), false);
 
-	for (size_t i = 0; const auto& emap : mesh.edges) {
-		if (inPrimMst[i++]) continue;
-		if (emap.second->face == nullptr || emap.second->pair->face == nullptr) continue;
+	for (const auto& edge : mesh.edges) {
+		if (inPrimMst[edge->id/2]) continue;
+		if (edge->isBoundary()) continue;
 
-		auto [u, v] = emap.second->adjacentFaces();
-		cotree.emplace_back(u, v);
-		edgeLengths.emplace_back(dmesh.length(dmesh.halfedge(u, v)));
+		auto e = dmesh.halfedge(edge->adjacentFindex());
+		cotree[e->id / 2] = true;
 	}
 
 	//---------- compute dual mst ----------
-	auto dualMst = kruskalSpanningTree(dmesh.getNumVerts(), cotree, edgeLengths);
+	auto dualMst = kruskalSpanningTree(dmesh, {}, cotree);
 	std::vector<bool> inDualMst(dmesh.getNumEdges(), false);
 	for (const auto i : dualMst) inDualMst[i] = true;
 
-	//---------- find bridges (neither primal mst nor dual mst) ----------
-	std::vector<heds::eKey> bridges;
-	for (size_t i = 0; const auto& edge : cotree) {
-		if (inDualMst[i++]) continue;
-		auto halfedge = dmesh.halfedge(edge.first, edge.second);
-		if (halfedge->face == nullptr || halfedge->pair->face == nullptr) continue;
-		auto [u, v] = halfedge->adjacentFaces();
-		bridges.emplace_back(u, v);
+	//---------- find bridges (neither primal mst nor cotree mst) ----------
+	std::vector<std::pair<size_t, size_t>> bridges;
+	for (const auto& edge : dmesh.edges) {
+		if (!cotree[edge->id/2]) continue;
+		if (inDualMst[edge->id/2]) continue;
+
+		if (dualCycle) bridges.emplace_back(edge->pair->endpointIndex());
+		else bridges.emplace_back(mesh.halfedge(edge->adjacentFindex())->endpointIndex());
 	}
 
 	//---------- cycle extraction ----------
-	std::vector<std::vector<size_t>> adList(tree.size());
-	for (size_t i = 0; i < primMst.size(); i++) {
-		auto [u, v] = tree[primMst[i]];
-		adList[u].emplace_back(v);
-		adList[v].emplace_back(u);
+	std::vector<std::vector<size_t>> adList(mesh.getNumVerts());
+	if (dualCycle) {
+		adList.resize(dmesh.getNumVerts());
+		for (size_t i = 0; i < dualMst.size(); i++) {
+			auto [u, v] = dmesh.edges[dualMst[i]]->endpointIndex();
+			adList[u].emplace_back(v);
+			adList[v].emplace_back(u);
+		}
+	} else {
+		for (size_t i = 0; i < primMst.size(); i++) {
+			auto [u, v] = mesh.edges[primMst[i]]->endpointIndex();
+			adList[u].emplace_back(v);
+			adList[v].emplace_back(u);
+		}
 	}
 
-	auto cycles = impl::cycleExtraction(mesh.getNumVerts(), adList, bridges);
+	auto cycles = impl::cycleExtraction(adList, bridges);
 	return cycles;
 }
 
@@ -458,20 +470,11 @@ template <typename T>
 std::vector<std::vector<size_t>> minimumHomologyBasis(
 	const heds::Mesh<T>& mesh, const bool pb = false) {
 	//--------------- prepare resource -----------------
-	
-	auto [dP, dF] = gp::util::dualMesh(mesh);
-	heds::Mesh dmesh(dP, dF);
+	auto [dverts, dfaces] = mesh.dual();
+	heds::Mesh<T> dmesh(dverts, dfaces);
 
 	std::vector<std::vector<size_t>> cycles;
 	cycles.reserve(mesh.getNumVerts() * 2);
-
-	std::vector<heds::eKey> tree;
-	tree.reserve(mesh.getNumEdges());
-	for (const auto& emap : mesh.edges) tree.emplace_back(emap.first);
-
-	std::unordered_map<heds::eKey, size_t, heds::eKeyHash> edges;
-	edges.reserve(tree.size());
-	for (size_t i = 0; i < tree.size(); i++) edges[tree[i]] = i;
 
 	{
 		if (pb) std::cout << "compute homology basis candidates" << std::endl;
@@ -480,10 +483,7 @@ std::vector<std::vector<size_t>> minimumHomologyBasis(
 		std::vector<double> pathLengths(mesh.getNumVerts());
 		std::vector<bool> inSpt(mesh.getNumEdges(), false);
 
-		std::vector<double> loopLength;
-		loopLength.reserve(mesh.getNumEdges() - mesh.getNumVerts() + 1);
-		std::vector<heds::eKey> cotree;
-		cotree.reserve(mesh.getNumEdges() - mesh.getNumVerts() + 1);
+		std::vector<double> loopLength(dmesh.getNumEdges(), std::numeric_limits<double>::max());
 
 		std::vector<bool> inMst(dmesh.getNumEdges(), false);
 
@@ -497,43 +497,47 @@ std::vector<std::vector<size_t>> minimumHomologyBasis(
 				std::tie(paths[i], pathLengths[i]) = impl::getPathDistToSource(shortestPathTree, i);
 				if (i == source) continue;
 				uint32_t u = (uint32_t)shortestPathTree[i].first, v = (uint32_t)i;
-				if (edges.contains(std::make_pair(u, v))) inSpt[edges.at(std::make_pair(u, v))] = true;
-				else inSpt[edges.at(std::make_pair(v, u))] = true;
+				auto edge = mesh.halfedge(u, v);
+				inSpt[edge->id/2] = true;
 			}
 
 			//---------- enumerate cycle candidates (greedy tree-cotree decomposition) ----------
-			loopLength.clear();
-			cotree.clear();
+			std::fill(loopLength.begin(), loopLength.end(), std::numeric_limits<double>::max());
+			std::vector<bool> cotree(dmesh.getNumEdges(), false);
 
-			for (size_t i = 0; const auto& emap : mesh.edges) {
-				if (inSpt[i++]) continue;
-				size_t u = emap.second->pair->vert->id, v = emap.second->vert->id;
+			for (const auto& edge : mesh.edges) {
+				if (inSpt[edge->id/2]) continue;
+				if (edge->isBoundary()) continue;
 
-				//loopLength.emplace_back(-((int)paths[u].size() + (int)paths[v].size() - 1));
-				loopLength.emplace_back(-(pathLengths[u] + pathLengths[v]));
-				cotree.emplace_back(emap.second->adjacentFaces());
+				auto [u, v] = edge->endpointIndex();
+				auto de = dmesh.halfedge(edge->adjacentFindex());
+
+				//loopLength[edge->id/2] = -((int)paths[u].size() + (int)paths[v].size() - 1);
+				loopLength[de->id/2] = -(pathLengths[u] + pathLengths[v]);
+				cotree[de->id/2] = true;
 			}
 
-			auto maxSpanningTree = kruskalSpanningTree(dmesh.getNumVerts(), cotree, loopLength);
+			auto maxSpanningTree = kruskalSpanningTree(dmesh, loopLength, cotree);
 			std::fill(inMst.begin(), inMst.end(), false);
 			for (const auto i : maxSpanningTree) inMst[i] = true;
 
-			std::vector<heds::eKey> bridges;
-			for (size_t i = 0; const auto& edge : cotree) {
-				if (inMst[i++]) continue;
-				auto halfedge = dmesh.halfedge(edge.first, edge.second);
-				bridges.emplace_back(halfedge->adjacentFaces());
+			std::vector<std::pair<size_t, size_t>> bridges;
+			for (const auto& edge : dmesh.edges) {
+				if (!cotree[edge->id/2]) continue;
+				if (inMst[edge->id/2]) continue;
+				if (edge->isBoundary()) continue;
+				bridges.emplace_back(mesh.halfedge(edge->adjacentFindex())->endpointIndex());
 			}
 			
-			std::vector<std::vector<size_t>> adList(tree.size());
+			std::vector<std::vector<size_t>> adList(mesh.getNumVerts());
 			for (size_t i = 0; i < inSpt.size(); i++) {
 				if (!inSpt[i]) continue;
-				auto [u, v] = tree[i];
+				auto [u, v] = mesh.edges[i]->endpointIndex();
 				adList[u].emplace_back(v);
 				adList[v].emplace_back(u);
 			}
 			
-			auto tct = impl::cycleExtraction(mesh.getNumVerts(), adList, bridges);
+			auto tct = impl::cycleExtraction(adList, bridges);
 			cycles.insert(cycles.end(), tct.begin(), tct.end());
 
 			source++;
@@ -549,13 +553,12 @@ std::vector<std::vector<size_t>> minimumHomologyBasis(
 
 	auto dualCycles = treeCotreeDecomp(dmesh);
 	
-	std::vector<std::unordered_set<heds::eKey, heds::eKeyHash>> dcEdges(dualCycles.size());
+	std::vector<std::vector<bool>> inDualCycles(dualCycles.size(), 
+		std::vector<bool>(dmesh.getNumEdges(), false));
 	for (size_t i = 0; const auto& cycle : dualCycles) {
-		dcEdges[i].reserve(cycle.size());
 		for (size_t j = 0, k = cycle.size(); j < k; j++) {
 			uint32_t u = (uint32_t)cycle[j], v = (uint32_t)cycle[(j+1)%k];
-			auto halfedge = dmesh.halfedge(u, v);
-			dcEdges[i].emplace(halfedge->adjacentFaces());
+			inDualCycles[i][dmesh.halfedge(u, v)->id/2] = true;
 		}
 		i++;
 	}
@@ -566,12 +569,10 @@ std::vector<std::vector<size_t>> minimumHomologyBasis(
 	for (size_t i = 0; i < cycles.size(); i++) {
 		for (size_t j = 0, k = cycles[i].size(); j < k; j++) {
 			uint32_t u = (uint32_t)cycles[i][j], v = (uint32_t)cycles[i][(j+1)%k];
-	
+			
+			auto ei = dmesh.halfedge(mesh.halfedge(u, v)->adjacentFindex())->id/2;
 			for (size_t g = 0; g < dualCycles.size(); g++) {
-				if (dcEdges[g].contains(std::make_pair(u, v)) || 
-					  dcEdges[g].contains(std::make_pair(v, u))) {
-					E(g, i) = !E(g, i);
-				}
+				if (inDualCycles[g][ei]) E(g, i) = !E(g, i);
 			}
 		}
 	}

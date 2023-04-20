@@ -34,5 +34,24 @@ namespace gp::util {
 		bool same(const Index lnode, const Index rnode) {
 			return root(lnode) == root(rnode);
 		}
+
+		std::vector<Index> getParentTree() {
+			return parents;
+		}
 	};
+
+	template <typename T1, typename T2>
+	auto connectedMesh(const T1& pos, const T2& faces) {
+		UnionFind uf(pos.size());
+		for (const auto& face : faces) {
+			for (size_t i = 1; i < face.size(); i++) uf.unite(face[0], face[i]);
+		}
+
+		std::unordered_map<size_t, std::vector<size_t>> s;
+		for (size_t i = 0; i < pos.size(); i++) {
+			s[uf.root(i)].emplace_back(i);
+		}
+
+		return s;
+	}
 }

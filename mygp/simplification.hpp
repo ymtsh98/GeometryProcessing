@@ -1,31 +1,30 @@
 #pragma once
 #include <queue>
 #include <utility>
-#include <mygp/halfedge_mesh.hpp>
 #include <Eigen/Core>
 #include <Eigen/Dense>
+#include <mygp/halfedge_mesh.hpp>
 
 namespace gp::simp::impl {
-	template <typename T>
-	Eigen::Matrix4d computeQEM(const heds::Mesh<T>& mesh, const size_t i) {
+	Eigen::Matrix4d computeQEM(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t i) {
 		Eigen::Matrix4d Q = Eigen::Matrix4d::Zero();
 
-		auto p = mesh.getPosition<Eigen::Vector3d>(i);
+		auto p = mesh.position(i);
 		for (const auto& f : mesh.verts[i]->adjacentFaces()) {
-			auto n = mesh.normal<Eigen::Vector3d>(f);
-			auto a = mesh.area(f);
+			auto n = mesh.normal(f);
 			Eigen::Vector4d q(n[0], n[1], n[2], -n.dot(p));
+			auto a = 0.5 * n.norm();
 			Q += a * q * q.transpose();
 		}
 
 		return Q;
 	}
 
-	template <typename T>
-	Eigen::Matrix4d computeQEM(const heds::Mesh<T>& mesh, const Eigen::MatrixXd& normals, const Eigen::VectorXd& areas, const size_t i) {
+	Eigen::Matrix4d computeQEM(const heds::Mesh<Eigen::MatrixX3d>& mesh, 
+		const Eigen::MatrixXd& normals, const Eigen::VectorXd& areas, const size_t i) {
 		Eigen::Matrix4d Q = Eigen::Matrix4d::Zero();
 
-		auto p = mesh.getPosition<Eigen::Vector3d>(i);
+		auto p = mesh.position(i);
 		auto e = mesh.verts[i]->edge;
 
 		do {
@@ -39,40 +38,33 @@ namespace gp::simp::impl {
 	}
 
 	std::pair<double, Eigen::Vector3d> computeOptPosition(
-		const Eigen::Matrix4d& Q1, const Eigen::Matrix4d& Q2){
-		//,	const Eigen::Vector3d& p1, const Eigen::Vector3d& p2) {
-		//Eigen::Matrix3d P = 0.0000001 * Eigen::Matrix3d::Identity();
-		Eigen::Matrix4d Q = Q1 + Q2;
-		Eigen::Matrix3d A = Q.block(0, 0, 3, 3);// + P;
-		Eigen::Vector3d b = Q.block(0, 3, 3, 1);// + 0.5 * (p1+p2) * 0.0000001;// + P.block(0, 3, 3, 1);
-		//Eigen::FullPivLU<Eigen::Matrix3d> solver(A);
+		const Eigen::Matrix4d& Q1, const Eigen::Matrix4d& Q2
+		//,	const Eigen::Vector3d& p1, const Eigen::Vector3d& p2
+	) {
+		Eigen::Matrix4d Q = Q1 + Q2;// +1e-30 * Eigen::Matrix4d::Identity();
+		Eigen::Matrix3d A = Q.block(0, 0, 3, 3);
+		Eigen::Vector3d b = Q.block(0, 3, 3, 1);// +0.5 * (p1+p2) * 1e-30;
 		Eigen::LDLT<Eigen::Matrix3d> solver(A);
-		double cost = -1.0;
-		Eigen::Vector3d p;
-		//if (solver.isInvertible()) {
-		if (solver.info() == Eigen::Success) {
-			p = solver.solve(-b);
-			cost = p.transpose() * A * p + 2.0 * b.dot(p) + Q(3, 3);
-		}
+		Eigen::Vector3d p = solver.solve(-b);
+		double cost = p.transpose() * A * p + 2.0 * b.dot(p) + Q(3, 3);
 
 		return std::make_pair(cost, p);
 	}
 
-	template <typename T>
-	bool normalFlip(const heds::Mesh<T>& mesh, const size_t i,
+	bool normalFlip(const heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t i,
 									const Eigen::Vector3d& optv, const double threshold) {
 
-		Eigen::Vector3d p = mesh.getPosition<Eigen::Vector3d>(i);
+		Eigen::Vector3d p = mesh.position(i);
 		auto neighbs = mesh.verts[i]->oneringNeighbs();
 		size_t l = neighbs.size();
 
 		for (size_t j = 0; j < (l - mesh.verts[i]->isBoundary()); j++) {
-			Eigen::Vector3d e1 = mesh.getPosition<Eigen::Vector3d>(neighbs[j]->id) - p;
-			Eigen::Vector3d e2 = mesh.getPosition<Eigen::Vector3d>(neighbs[(j+1)%l]->id) - p;
+			Eigen::Vector3d e1 = mesh.position(neighbs[j]->id) - p;
+			Eigen::Vector3d e2 = mesh.position(neighbs[(j+1)%l]->id) - p;
 			Eigen::Vector3d n1 = e2.cross(e1).normalized();
 
-			e1 =  mesh.getPosition<Eigen::Vector3d>(neighbs[j]->id) - optv;
-			e2 = mesh.getPosition<Eigen::Vector3d>(neighbs[(j+1)%l]->id) - optv;
+			e1 =  mesh.position(neighbs[j]->id) - optv;
+			e2 = mesh.position(neighbs[(j+1)%l]->id) - optv;
 			Eigen::Vector3d n2 = e2.cross(e1).normalized();
 			if (n1.dot(n2) < threshold) return true;
 		}
@@ -80,39 +72,36 @@ namespace gp::simp::impl {
 		return false;
 	}
 
-	template <typename T>
-	std::pair<double, Eigen::Vector3d> getCostPos(const heds::Mesh<T>& mesh,
+	std::pair<double, Eigen::Vector3d> getCostPos(const heds::Mesh<Eigen::MatrixX3d>& mesh,
 																								const std::vector<Eigen::Matrix4d>& qem,
 																								const size_t i, const size_t j, const double threshold) {
 		constexpr double LARGE_NUMBER = 1e+6;
 
 		std::pair<double, Eigen::Vector3d> cp;
 
-		cp = computeOptPosition(qem[i], qem[j]);
-			//, mesh.getPosition<Eigen::Vector3d>(i), mesh.getPosition<Eigen::Vector3d>(j));
+		cp = computeOptPosition(qem[i], qem[j]//, mesh.position(i), mesh.position(j)
+		);
 
 		if (cp.first < 0.0) {
 			cp.first = LARGE_NUMBER;
 			switch ((i^j)%3) {
 			case 0:
-				cp.second = mesh.getPosition<Eigen::Vector3d>(i);
+				cp.second = mesh.position(i);
 				break;
 			case 1:
-				cp.second = mesh.getPosition<Eigen::Vector3d>(j);
+				cp.second = mesh.position(j);
 				break;
 			case 2:
-				cp.second = 0.5 * (mesh.getPosition<Eigen::Vector3d>(i) +
-													 mesh.getPosition<Eigen::Vector3d>(j));
+				cp.second = 0.5 * (mesh.position(i) +
+													 mesh.position(j));
 			}
 		}
 
 		if (mesh.verts[i]->isBoundary() || mesh.verts[j]->isBoundary()) {
 			cp.second = mesh.verts[i]->isBoundary() ?
 				(mesh.verts[j]->isBoundary() ?
-				 0.5 * (mesh.getPosition<Eigen::Vector3d>(i) +
-								mesh.getPosition<Eigen::Vector3d>(j)) :
-				 mesh.getPosition<Eigen::Vector3d>(i))
-				: mesh.getPosition<Eigen::Vector3d>(j);
+				 0.5 * (mesh.position(i) + mesh.position(j)) :
+				 mesh.position(i)): mesh.position(j);
 		}
 
 		if (threshold < 1.0) {
@@ -123,13 +112,11 @@ namespace gp::simp::impl {
 		return cp;
 	}
 
-
 }
 
 namespace gp::simp {
 	// warning : rewrites binded positions
-	template <typename T>
-	void qemSimplification(heds::Mesh<T>& mesh, const size_t numTarget, const double nflipThres=1.0) {
+	void qemSimplification(heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t numTarget, const double nflipThres=1.0) {
 		size_t nv = mesh.getNumVerts();
 
 		// --------------- initialization ---------------
@@ -144,18 +131,11 @@ namespace gp::simp {
 
 		using node = std::tuple<double, size_t, size_t, heds::pte, Eigen::Vector3d>;
 		std::vector<node> buffer(mesh.getNumEdges());
-		//for (const auto& emap : mesh.edges) {
-		//	auto [pi, pj] = emap.first;
-		//	auto [cost, optv] = impl::qem::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
-		//	queue.emplace(cost, 0, 0, emap.second, optv);
-		//}
-		#pragma omp parallel for
-		for (int i = 0; i < mesh.edges.bucket_count(); i++) {
-			for (auto itr = mesh.edges.begin(i); itr != mesh.edges.end(i); ++itr) {
-				auto [pi, pj] = itr->first;
-				auto [cost, optv] = impl::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
-				buffer[itr->second->id/2] = std::make_tuple(cost, 0, 0, itr->second, optv);
-			}
+		for (const auto& edge : mesh.edges) {
+			auto&& e = edge;
+			auto [pi, pj] = edge->endpointIndex();
+			auto [cost, optv] = impl::getCostPos(mesh, quadricErrorMetrices, pi, pj, nflipThres);
+			buffer[e->id/2] = std::make_tuple(cost, 0, 0, e, optv);
 		}
 		auto compare = [](auto& l, auto& r) { return std::get<0>(l) > std::get<0>(r); };
 		std::priority_queue<node, std::vector<node>, decltype(compare)> queue(decltype(compare)(), std::move(buffer));
@@ -244,12 +224,11 @@ namespace gp::simp {
 	}
 
 	// TODO : sloppy implementation
-	template <typename T>
-	std::pair<Eigen::MatrixXd, std::vector<uint32_t>> vclustSimplification(heds::Mesh<T>& mesh, const size_t numGrid) {
-		Eigen::Vector3d minCorner = mesh.getPosition<Eigen::Vector3d>(0);
-		Eigen::Vector3d maxCorner = mesh.getPosition<Eigen::Vector3d>(0);
-		for (size_t i = 0; i < mesh.getNumVertices(); i++) {
-			auto v = mesh.getPosition<Eigen::Vector3d>(i);
+	std::pair<Eigen::MatrixXd, std::vector<uint32_t>> vclustSimplification(heds::Mesh<Eigen::MatrixX3d>& mesh, const size_t numGrid) {
+		Eigen::Vector3d minCorner = mesh.position(0);
+		Eigen::Vector3d maxCorner = mesh.position(0);
+		for (size_t i = 0; i < mesh.getNumVerts(); i++) {
+			auto v = mesh.position(i);
 			for (size_t j = 0; j < 3; j++) {
 				minCorner[j] = std::min(minCorner[j], v[j]);
 				maxCorner[j] = std::max(maxCorner[j], v[j]);
@@ -258,7 +237,7 @@ namespace gp::simp {
 		Eigen::Vector3d cellSize = (maxCorner - minCorner).array() / (double)numGrid;
 		for (size_t i = 0; i < 3; i++) if (abs(cellSize[i]) < 1e-5) cellSize[i] = 1.0;
 
-		std::vector<Eigen::Matrix4d> quadricErrorMetrices(mesh.getNumVertices());
+		std::vector<Eigen::Matrix4d> quadricErrorMetrices(mesh.getNumVerts());
 		#pragma omp parallel for
 		for (int i = 0; i < quadricErrorMetrices.size(); i++) {
 			quadricErrorMetrices[i] = impl::computeQEM(mesh, i);
@@ -278,9 +257,9 @@ namespace gp::simp {
 		std::vector<uint32_t> indices;
 		for (size_t i = 0; i < mesh.getNumFaces(); i++) {
 			auto verts = mesh.faces[i]->adjacentVerts();
-			auto v1 = mesh.getPosition<Eigen::Vector3d>(verts[0]->id);
-			auto v2 = mesh.getPosition<Eigen::Vector3d>(verts[1]->id);
-			auto v3 = mesh.getPosition<Eigen::Vector3d>(verts[2]->id);
+			auto v1 = mesh.position(verts[0]->id);
+			auto v2 = mesh.position(verts[1]->id);
+			auto v3 = mesh.position(verts[2]->id);
 			auto i1 = gridIndex(v1);
 			auto i2 = gridIndex(v2);
 			auto i3 = gridIndex(v3);
@@ -301,7 +280,7 @@ namespace gp::simp {
 		}
 
 		Eigen::LDLT<Eigen::Matrix3d> solver;
-		for (size_t i = 0; i < representPos.rows(); i++) {
+		for (size_t i = 0; i < (size_t)representPos.rows(); i++) {
 			if (count[i] == 0) continue;
 			//representPos.row(i) /= (double)count[i];
 
