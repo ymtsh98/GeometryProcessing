@@ -46,11 +46,8 @@ mygp(old version) -> kika(refactored version(unfinished))
   
 * iterative closest point
 * coherent point drift (
- Myronenko, Andriy and Song, Xubo. Point Set Registration: Coherent Point Drift. IEEE Transactions on Pattern Analysis and Machine Intelligence. 32. 2262-75, 2010.
-
-O. Hirose. A Bayesian Formulation of Coherent Point Drift. IEEE Transactions on Pattern Analysis and Machine Intelligence, 43, 2269-2286, 2021.
-
-O. Hirose. Acceleration of Non-Rigid Point Set Registration With Downsampling and Gaussian Process Regression. IEEE Transactions on Pattern Analysis and Machine Intelligence, 43, 2858-2865, 2021.)
+ Myronenko, Andriy and Song, Xubo. Point Set Registration: Coherent Point Drift. IEEE Transactions on Pattern Analysis and Machine Intelligence. 32. 2262-75, 2010.;
+O. Hirose. A Bayesian Formulation of Coherent Point Drift. IEEE Transactions on Pattern Analysis and Machine Intelligence, 43, 2269-2286, 2021.;O. Hirose. Acceleration of Non-Rigid Point Set Registration With Downsampling and Gaussian Process Regression. IEEE Transactions on Pattern Analysis and Machine Intelligence, 43, 2858-2865, 2021.)
   * ![cpd1](/images/affine.gif)
   * ![cpd2](/images/bcpd.gif)
   
