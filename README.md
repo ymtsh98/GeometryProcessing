@@ -87,6 +87,6 @@ O. Hirose. Acceleration of Non-Rigid Point Set Registration With Downsampling an
   * ![corres3](/images/volume_uv.png)
   * ![corres4](/images/dog2dog.gif)
   * ![corres5](/images/rhino2wolf.gif)
-  * https://user-images.githubusercontent.com/36565846/233379018-b9b529f0-c69a-4e1c-9494-cb1ed7cd2005.mp4
-  * https://user-images.githubusercontent.com/36565846/233379185-faff3e0e-4373-4e22-bc96-7799f24836ca.mp4
+https://user-images.githubusercontent.com/36565846/233379018-b9b529f0-c69a-4e1c-9494-cb1ed7cd2005.mp4
+https://user-images.githubusercontent.com/36565846/233379185-faff3e0e-4373-4e22-bc96-7799f24836ca.mp4
 
