@@ -85,6 +85,7 @@ O. Hirose. A Bayesian Formulation of Coherent Point Drift. IEEE Transactions on 
   * ![corres1](/images/shape_corres.png)
   * ![corres2](/images/cat_to.png)
   * ![corres3](/images/volume_uv.png)
+  * ![corres6](/images/sync_field.png)
   * ![corres4](/images/dog2dog.gif)
   * ![corres5](/images/rhino2wolf.gif)
   
