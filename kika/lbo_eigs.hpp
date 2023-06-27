@@ -16,7 +16,6 @@ class LboEigs {
 	kika::diff::DiscreteLaplacian& dsl;
 
 	double surfaceArea;
-	Eigen::SparseMatrix<double> restrictOp;
 
 	cusolverDnHandle_t cusolverHandle;
 
@@ -137,11 +136,11 @@ class LboEigs {
 			}
 		}
 
-		restrictOp.resize(mesh.getNumVerts(), samples.size());
-		restrictOp.setFromTriplets(triplets.begin(), triplets.end());
+		prolongOp.resize(mesh.getNumVerts(), samples.size());
+		prolongOp.setFromTriplets(triplets.begin(), triplets.end());
 
-		Eigen::VectorXd r1 = restrictOp * Eigen::VectorXd::Ones(restrictOp.cols());
-		restrictOp = r1.cwiseInverse().asDiagonal() * restrictOp;
+		Eigen::VectorXd r1 = prolongOp * Eigen::VectorXd::Ones(prolongOp.cols());
+		prolongOp = r1.cwiseInverse().asDiagonal() * prolongOp;
 	}
 
 	void eigCuda(const Eigen::MatrixXd& L, const Eigen::MatrixXd& M) {
@@ -199,6 +198,7 @@ public:
 	std::vector<uint32_t> samples;
 	Eigen::VectorXd evals;
 	Eigen::MatrixXd evecs;
+	Eigen::SparseMatrix<double> prolongOp;
 
 	// @param sampleSize : (defalut) 5 * n
 	LboEigs(kika::heds::SurfaceMesh& mesh, kika::diff::DiscreteLaplacian& dsl, const size_t n, size_t sampleSize = 0) :
@@ -206,7 +206,7 @@ public:
 		if (sampleSize == 0) sampleSize = std::min<size_t>(5 * n, mesh.getNumVerts());
 		if (sampleSize < n) sampleSize = n;
 		std::thread setupCuda;
-		if (sampleSize >= 1000) setupCuda = std::thread([this]() { cusolverDnCreate(&cusolverHandle); });
+		if (sampleSize > 1000) setupCuda = std::thread([this]() { cusolverDnCreate(&cusolverHandle); });
 
 		dsl.laplacianOp();
 		dsl.vertexAreas();
@@ -215,10 +215,10 @@ public:
 		blueNoiseSampling(sampleSize);
 
 		computeLocalBasis();
-		Eigen::MatrixXd L = restrictOp.transpose() * dsl.lbo * restrictOp;
-		Eigen::MatrixXd M = restrictOp.transpose() * dsl.s0.asDiagonal() * restrictOp;
+		Eigen::MatrixXd L = prolongOp.transpose() * dsl.lbo * prolongOp;
+		Eigen::MatrixXd M = prolongOp.transpose() * dsl.s0.asDiagonal() * prolongOp;
 
-		if (sampleSize < 1000) {
+		if (sampleSize <= 1000) {
 			eigCpu(L, M);
 		} else {
 			if (setupCuda.joinable()) setupCuda.join();
@@ -227,7 +227,7 @@ public:
 
 		Eigen::VectorXd m = (evecs.transpose() * M * evecs).diagonal();
 		evecs = evecs.array().rowwise() * m.cwiseSqrt().cwiseInverse().array().transpose();
-		evecs = (restrictOp * evecs).leftCols(n).eval();
+		evecs = (prolongOp * evecs).leftCols(n).eval();
 		evals = evals.cwiseAbs().topRows(n).eval();
 	}
 

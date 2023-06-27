@@ -103,9 +103,12 @@ std::vector<I> vecrange(const size_t start, const size_t end) {
 	return vec;
 }
 
-template <typename T1, typename T2>
-std::vector<T1> vecast(const std::vector<T2>& vec) {
-	return std::vector<T1>(vec.begin(), vec.end());
+template <typename S1, typename T, typename S2 = T::value_type, class = std::void_t<decltype(std::declval<T>().begin())>>
+std::vector<S1> vecast(const T& vec) {
+	#pragma warning (push) 
+	#pragma warning (disable : 4244)
+	return std::vector<S1>(vec.begin(), vec.end());
+	#pragma warning(pop)
 }
 
 template <typename T, typename Idx>
@@ -329,6 +332,15 @@ inline Eigen::Vector3d project2plane(const Eigen::Vector3d& p, const Eigen::Vect
 	return p - (pointe2planeDist(p, n, v)) * n;
 }
 
+// compute an arbitary tangent basis
+inline std::pair<Eigen::Vector3d, Eigen::Vector3d> tangentBasis(const Eigen::Vector3d& n) {
+	Eigen::Vector3d v = Eigen::Vector3d::UnitX();
+
+	if (fabs(n.dot(v)) > 0.95) v = Eigen::Vector3d::UnitY();
+	Eigen::Vector3d t1 = v.cross(n);
+	Eigen::Vector3d t2 = n.cross(t1);
+	return std::make_pair(t1, t2);
+}
 
 #endif
 }

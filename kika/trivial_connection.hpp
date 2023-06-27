@@ -171,20 +171,34 @@ public:
     harmonicBasis();
   }
 
-  /// // v - e + f = - 2g + 2 - b 
-  /// (sometime : b = boundary - 1 ?)
+  /// sum of singularity = v - e + f = - 2g + 2 - b 
+  /// saddle (-1), tripod (-1/2),thorn(+1/2), focus(+1), apple(+3/2)
   /// Eigen::VectorXd singularity = Eigen::VectorXd::Zero(mesh.getNumVerts());
   /// singularity[i] = 1, -1 ... etc;
   /// 
   /// compute trivial connections
-  /// @return vertex wise vector fields
-  Eigen::MatrixX3d solve(const Eigen::VectorXd& singularity, const double initAngle = 0.0, const bool fwise = false) {
+  /// @return face wise vector fields
+  Eigen::MatrixX3d solve(const Eigen::VectorXd& singularity, const double initAngle = 0.0) {
 
     auto x = trivialHolonomy(singularity);
 
     auto h = nonTrivialHolonomy(x);
 
     return propagateAngle(x, h, 0, initAngle);
+  }
+
+  /// sum of singularityType = v - e + f = - 2g + 2 - b 
+  /// saddle (-1), tripod (-1/2),thorn(+1/2), focus(+1), apple(+3/2)
+  /// compute trivial connections
+  /// @return face wise vector fields
+  template <typename T = uint32_t>
+  Eigen::MatrixX3d solve(const std::vector<T>& singularityIdx, const std::vector<double>& singularityType, const double initAngle = 0.0) {
+    Eigen::VectorXd singularity = Eigen::VectorXd::Zero(mesh.getNumVerts());
+    for (size_t i = 0; i < singularityIdx.size(); i++) {
+      singularity[singularityIdx[i]] = singularityType[i];
+    }
+
+    return solve(singularity, initAngle);
   }
 
 };

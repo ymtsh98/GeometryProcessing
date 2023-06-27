@@ -24,7 +24,7 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 		void getNearestNeighbor(const float* query, size_t& index, float& dist) const {
 			nanoflann::KNNResultSet<float> resultSet(1);
 			resultSet.init(&index, &dist);
-			tree.index->findNeighbors(resultSet, query, nanoflann::SearchParams());
+			tree.index->findNeighbors(resultSet, query, nanoflann::SearchParameters());
 		}
 
 		size_t getNearestNeighbor(const float* query) const {
@@ -35,15 +35,15 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 			return index;
 		}
 
-		template <typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
-		std::vector<size_t> getNearestNeighbors(const Eigen::DenseBase<Deriv>& pts) const {
-			std::vector<size_t> nn(pts.rows());
+		template <typename T = size_t, typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
+		std::vector<T> getNearestNeighbors(const Eigen::DenseBase<Deriv>& pts) const {
+			std::vector<T> nn(pts.rows());
 
 			Eigen::Matrix<float, R, C, Eigen::RowMajor> tmp = pts.cast<float>();
 
 			#pragma omp parallel for
 			for (int i = 0; i < tmp.rows(); ++i) {
-				nn[i] = getNearestNeighbor(tmp.row(i).data());
+				nn[i] = static_cast<T>(getNearestNeighbor(tmp.row(i).data()));
 			}
 
 			return nn;
@@ -56,14 +56,18 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 
 			nanoflann::KNNResultSet<float> resultSet(k);
 			resultSet.init(&indices[0], &dists[0]);
-			tree.index->findNeighbors(resultSet, query, nanoflann::SearchParams());
+			tree.index->findNeighbors(resultSet, query, nanoflann::SearchParameters());
 		}
 
-		std::vector<size_t> getKNearestNeighbor(const float* query, const size_t k) const {
+		template <typename T = size_t>
+		std::vector<T> getKNearestNeighbor(const float* query, const size_t k) const {
 			std::vector<size_t> indices(k);
 			std::vector<float> dists(k);
 			getKNearestNeighbor(query, k, indices, dists);
-			return indices;
+			if constexpr (std::is_same_v<T, size_t>)
+				return indices;
+			else
+				return util::vecast<T>(indices);
 		}
 
 		template <typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
@@ -82,7 +86,7 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 
 		void getRNearestNeighbor(const float* query, const float r,
 			std::vector<std::pair<Eigen::Index, float>>& indicesDists) const {
-			tree.index->radiusSearch(query, r, indicesDists, nanoflann::SearchParams());
+			tree.index->radiusSearch(query, r, indicesDists, nanoflann::SearchParameters());
 		}
 
 		template <typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
@@ -98,25 +102,26 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 			}
 		}
 
-		template <typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
-		std::vector<std::vector<size_t>> getRNearestNeighbors(const Eigen::DenseBase<Deriv>& pts, const float r) const {
+		template <typename T = size_t, typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
+		std::vector<std::vector<T>> getRNearestNeighbors(const Eigen::DenseBase<Deriv>& pts, const float r) const {
 			std::vector<std::vector<std::pair<Eigen::Index, float>>> indicesDists;
 			getRNearestNeighbors(pts, r, indicesDists);
 
-			std::vector<std::vector<size_t>> indices(indicesDists.size());
+			std::vector<std::vector<T>> indices(indicesDists.size());
 			for (size_t i = 0; i < indices.size(); i++) {
 				indices[i].resize(indicesDists[i].size());
 				for (size_t j = 0; j < indices[i].size(); j++) {
-					indices[i][j] = indicesDists[i][j].first;
+					indices[i][j] = static_cast<T>(indicesDists[i][j].first);
 				}
 			}
 			return indices;
 		}
 
-		template <typename Derived1, typename Derived2>
-		static std::vector<size_t> nearestNeighbors(const Eigen::DenseBase<Derived1>& src, const Eigen::DenseBase<Derived2>& trg, const int maxLeaf = 10) {
-			auto tree = NanoFlannKNN(src, maxLeaf);
-			return tree.getNearestNeighbors(trg);
-		}
 };
+
+template <typename T = size_t, typename Derived1, typename Derived2>
+std::vector<T> nanoflann(const Eigen::DenseBase<Derived1>& src, const Eigen::DenseBase<Derived2>& trg, const int maxLeaf = 10) {
+	return NanoFlannKNN(src, maxLeaf).getNearestNeighbors<T>(trg);
+}
+
 }

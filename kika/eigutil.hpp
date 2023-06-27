@@ -203,6 +203,31 @@ Eigen::SparseMatrix<T> sprand(const size_t rows, const size_t cols, const double
 	return mat;
 }
 
+/// random symmetric sparse matrix (0.0 - 1.0)
+template <typename T=double>
+Eigen::SparseMatrix<T> sprandsym(const size_t rows, const size_t cols, double density, const unsigned int seed = std::random_device{}()) {
+	density *= .5;
+	std::mt19937 engine(seed);
+
+	std::uniform_real_distribution<T> dist(0.0, 1.0);
+
+	std::vector<Eigen::Triplet<T>> triplets;
+	triplets.reserve((size_t)(rows * cols * density));
+	for (size_t i = 0; i < rows; i++) {
+		for (size_t j = 0; j < cols; j++) {
+			if (dist(engine) < density) {
+				auto d = dist(engine);
+				triplets.emplace_back((int)i, (int)j, d);
+				triplets.emplace_back((int)j, (int)i, d);
+			}
+		}
+	}
+
+	Eigen::SparseMatrix<T> mat(rows, cols);
+	mat.setFromTriplets(triplets.begin(), triplets.end());
+	return mat;
+}
+
 // vector as diagonal sparse matrix.
 template <typename T = double>
 Eigen::SparseMatrix<T> spdiag(const Eigen::VectorX<T>& diag) {
@@ -211,6 +236,55 @@ Eigen::SparseMatrix<T> spdiag(const Eigen::VectorX<T>& diag) {
 	mat.diagonal().array() *= diag.array();
 	return mat;
 }
+
+// (rowwise or colwise) max for sparse matrix
+template <typename T = double>
+inline Eigen::VectorX<T> spMaxCoeff(const Eigen::SparseMatrix<T>& mat, const bool rowwise = true) {
+	Eigen::VectorX<T> value = Eigen::VectorX<T>::Zero(rowwise ? mat.rows() : mat.cols());
+
+	for (int k=0; k < mat.outerSize(); ++k) {
+		for (typename Eigen::SparseMatrix<T>::InnerIterator it(mat, k); it; ++it) {
+			if (rowwise) {
+				if (it.value() > value[it.row()]) {
+					value[it.row()] = it.value();
+				}
+			} else {
+				if (it.value() > value[it.col()]) {
+					value[it.col()] = it.value();
+				}
+			}
+		}
+	}
+
+	return value;
+}
+
+// (rowwise or colwise) argmax for sparse matrix
+template <typename Ret = std::vector<uint32_t>, typename T = double>
+inline Ret spArgMax(const Eigen::SparseMatrix<T>& mat, const bool rowwise = true) {
+	Eigen::VectorX<T> value = Eigen::VectorX<T>::Zero(rowwise ? mat.rows() : mat.cols());
+	Ret index(rowwise ? mat.rows() : mat.cols());
+	std::fill(index.begin(), index.end(), 0);
+	
+	for (int k=0; k < mat.outerSize(); ++k) {
+		for (typename Eigen::SparseMatrix<T>::InnerIterator it(mat, k); it; ++it) {
+			if (rowwise) {
+				if (it.value() > value[it.row()]) {
+					value[it.row()] = it.value();
+					index[it.row()] = static_cast<Ret::value_type>(it.col());
+				}
+			} else {
+				if (it.value() > value[it.col()]) {
+					value[it.col()] = it.value();
+					index[it.col()] = static_cast<Ret::value_type>(it.row());
+				}
+			}
+		}
+	}
+
+	return index;
+}
+
 
 /// @param offset : start index offset
 /// @return rows, cols, vals

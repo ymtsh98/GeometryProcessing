@@ -18,18 +18,18 @@ public:
 		return mat[i];
 	}
 
-	Eigen::SparseMatrix<double> operator*(const SparseMatrices3d& other) {
+	Eigen::SparseMatrix<double> operator*(const SparseMatrices3d& other) const {
 		return (mat[0] * other.mat[0] + mat[1] * other.mat[1] + mat[2] * other.mat[2]);
 	}
 
-	Eigen::MatrixX3d operator*(const Eigen::VectorXd& v) {
+	Eigen::MatrixX3d operator*(const Eigen::VectorXd& v) const {
 		Eigen::MatrixX3d ret(mat[0].rows(), 3);
 		for (int i = 0; i < 3; i++)
 			ret.col(i) = mat[i] * v;
 		return ret;
 	}
 
-	Eigen::VectorXd operator*(const Eigen::MatrixX3d& m) {
+	Eigen::VectorXd operator*(const Eigen::MatrixX3d& m) const {
 		return (mat[0] * m.col(0) + mat[1] * m.col(1) + mat[2] * m.col(2));
 	}
 };
@@ -43,7 +43,7 @@ protected:
 	const heds::SurfaceMesh& mesh;
 public:
 
-	DiscreteLaplacian(heds::SurfaceMesh& mesh) : mesh(mesh) {}
+	DiscreteLaplacian(heds::SurfaceMesh& mesh, const bool initialize = true) : mesh(mesh) {}
 
 	Eigen::SparseMatrix<double> lbo; // vertex-wise laplace-beltrami operator
 
@@ -56,6 +56,10 @@ public:
 
 	Eigen::SparseMatrix<double> d0; // 0-form exterior derivative : E x V
 	Eigen::SparseMatrix<double> d1; // 1-form exteriro derivative : F x E
+
+	Eigen::SparseMatrix<Eigen::dcomplex> clbo; // vertex-wise connection laplacian
+
+	virtual void init() {};
 
 	void reset() {
 		lbo.resize(0, 0);
@@ -291,6 +295,103 @@ public:
 		return gf;
 	}
 
+	// counter-clockwise ordered one-ring angles relative to reference edge(mesh.verts[i]->edge)
+	virtual Eigen::SparseMatrix<double> oneringAngles() const {
+		Eigen::SparseMatrix<double> phi(mesh.getNumVerts(), mesh.getNumVerts());
+		std::vector<Eigen::Triplet<double>> ptriplets;
+		ptriplets.reserve(6 * mesh.getNumVerts());
+
+		for (size_t i = 0; i < mesh.verts.size(); i++) {
+			auto oring = mesh.verts[i]->oneringNeighbs<heds::Idx, heds::CCW>();
+
+			Eigen::VectorXd p(oring.size());
+
+			Eigen::Vector3d v = mesh.pos.row(i);
+			for (size_t j = 0, k = oring.size(); j < oring.size(); j++) {
+				Eigen::Vector3d u = mesh.pos.row(oring[j]);
+				Eigen::Vector3d w = mesh.pos.row(oring[(j+1)%k]);
+				p[j] = kika::util::angle(u - v, w - v);
+			}
+
+			if (mesh.verts[i]->isBoundary() && ((p.sum() - p[0]) < std::numbers::pi)) {
+				p[0] = 2.0 * std::numbers::pi - p[0];
+			}
+
+			p.array() *= 2.0 * std::numbers::pi / p.sum();
+
+			double theta = 0.0;
+			for (size_t j = 0; j < oring.size(); j++) {
+				ptriplets.emplace_back((int)i, (int)oring[j], theta);
+				theta += p[j];
+			}
+		}
+
+		phi.setFromTriplets(ptriplets.begin(), ptriplets.end());
+		return phi;
+	}
+
+	// counter-clockwise ordered one-ring edges (uniform length) relative to reference edge (mesh.verts[i]->edge)
+	virtual Eigen::SparseMatrix<Eigen::dcomplex> oneringEdges() const {
+		auto angles = oneringAngles();
+		Eigen::SparseMatrix<Eigen::dcomplex> phi(mesh.getNumVerts(), mesh.getNumVerts());
+		std::vector<Eigen::Triplet<Eigen::dcomplex>> triplets;
+		triplets.reserve(mesh.edges.size() * 2);
+
+		for (const auto& edge : mesh.edges) {
+			auto [u, v] = edge->endpoint();
+			Eigen::dcomplex ruv = std::polar(1.0, angles.coeff(u, v)), rvu = std::polar(1.0, angles.coeff(v, u));
+			rvu = -rvu / ruv; ruv = std::conj(rvu);
+			triplets.emplace_back(u, v, ruv);
+			triplets.emplace_back(v, u, rvu);
+		}
+		phi.setFromTriplets(triplets.begin(), triplets.end());
+
+		return phi;
+	}
+
+	// vertex-wise connection laplacian for triangle mesh
+	virtual const Eigen::SparseMatrix<Eigen::dcomplex>& connectionLaplacianOp() {
+		if (clbo.size() != 0) return clbo;
+
+		auto phi = oneringEdges();
+
+		std::vector<Eigen::Triplet<Eigen::dcomplex>> triplets;
+		triplets.reserve(9 * mesh.getNumFaces());
+
+		for (const auto& face : mesh.faces) {
+			auto& e0 = face->edge;
+			auto& e1 = e0->next;
+			auto& e2 = e1->next;
+
+			double w0 = 0.5 * mesh.cot(e0);
+			double w1 = 0.5 * mesh.cot(e1);
+			double w2 = 0.5 * mesh.cot(e2);
+
+			auto v0 = e0->vert->id;
+			auto v1 = e1->vert->id;
+			auto v2 = e2->vert->id;
+
+			Eigen::dcomplex r01 = phi.coeff(v0, v1), r10 = phi.coeff(v1, v0);
+			Eigen::dcomplex r12 = phi.coeff(v1, v2), r21 = phi.coeff(v2, v1);
+			Eigen::dcomplex r02 = phi.coeff(v0, v2), r20 = phi.coeff(v2, v0);
+
+			triplets.emplace_back(v0, v0, (w0 + w1));
+			triplets.emplace_back(v1, v1, (w1 + w2));
+			triplets.emplace_back(v2, v2, (w2 + w0));
+
+			triplets.emplace_back(v0, v1, -w1 * r01);
+			triplets.emplace_back(v1, v0, -w1 * r10);
+			triplets.emplace_back(v1, v2, -w2 * r12);
+			triplets.emplace_back(v2, v1, -w2 * r21);
+			triplets.emplace_back(v2, v0, -w0 * r20);
+			triplets.emplace_back(v0, v2, -w0 * r02);
+		}
+
+		clbo.resize(mesh.getNumVerts(), mesh.getNumVerts());
+		clbo.setFromTriplets(triplets.begin(), triplets.end());
+		return clbo;
+	}
+
 };
 
 }
@@ -307,7 +408,7 @@ class PixarPolyLaplacian : public DiscreteLaplacian {
 public:
 	std::vector<Eigen::MatrixXd> weakLbo; // face-wise laplace-beltrami operator
 
-	PixarPolyLaplacian(heds::SurfaceMesh& mesh, const double lambda = 1.0) : DiscreteLaplacian(mesh), lambda(lambda) {}
+	PixarPolyLaplacian(heds::SurfaceMesh& mesh, const double lambda = 1.0, const bool initialize = true) : DiscreteLaplacian(mesh), lambda(lambda) {}
 
 	void reset() {
 		weakLbo.resize(0);
@@ -528,7 +629,11 @@ class VirtualVertexLaplacian : public DiscreteLaplacian {
 	////}
 
 public:
-	VirtualVertexLaplacian(heds::SurfaceMesh& mesh) : DiscreteLaplacian(mesh) {
+	VirtualVertexLaplacian(heds::SurfaceMesh& mesh, const bool initialize = true) : DiscreteLaplacian(mesh) {
+		if (initialize) init();
+	}
+
+	void init() final {
 		size_t nv = mesh.getNumVerts(), nf = mesh.getNumFaces(), nvf = nv + nf, ntri = 0;
 		std::vector<Eigen::Triplet<double>> p0triples, p2triples;
 		p0triples.reserve(nv + nf * 4);
@@ -707,7 +812,11 @@ class DiamondLaplacian : public DiscreteLaplacian {
 
 public:
 
-	DiamondLaplacian(heds::SurfaceMesh& mesh) : DiscreteLaplacian(mesh) {
+	DiamondLaplacian(heds::SurfaceMesh& mesh, const bool initialize = true) : DiscreteLaplacian(mesh) {
+		if (initialize) init();
+	}
+
+	void init() final {
 		computeDualProlongation();
 	}
 

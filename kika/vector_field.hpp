@@ -275,13 +275,14 @@ public:
 
 	/// @brief 
 	/// @param offset : offset of normal direction rate (offset * ael)
-	/// @param lengthRate : length rate (length = lengthRate * ael * vf_length[0, 1] + baseLength)
-	/// @param baseLength : length base (length = lengthRate * ael * vf_length[0, 1] + baseLength)
-	/// @param lineStyle
+	/// @param lengthRate : length rate (length = lengthRate * ael * (vf_length[0, 1] + baseLength))
+	/// @param baseLength : length base (length = lengthRate * ael * (vf_length[0, 1] + baseLength))
+	/// @param uniformLength
 	/// @param rate (0, 1): distribution rate
+	/// @param lineStyle
 	/// @return 
 	VectorField& prepareDrawableArrow(double offset = 0.1, double lengthRate = 1.0,
-		double baseLength = 0.2, const bool lineStyle = false, const double rate = 1.0) {
+		double baseLength = 1.0, const bool uniformLength = true, const double rate = 1.0, const bool lineStyle = false) {
 		offset *= ael;
 		lengthRate *= ael;
 
@@ -311,14 +312,14 @@ public:
 		};
 
 		if (space == Intrinsic) {
-			lengths = kika::eig::zero2oneNorm(intrinData.cwiseAbs()).array() + baseLength;
+			lengths = (!uniformLength) * kika::eig::zero2oneNorm(intrinData.cwiseAbs()).array() + baseLength;
 
 			if (form == Vwise) {
 				for (size_t i = 0; i < s; i++) {
 					auto p = mesh.pos.row(i).transpose().eval();
 					auto n = mesh.normal(mesh.verts[i]);
-					auto e = mesh.edgevec(mesh.verts[i]->edge->pair);
-					e = kika::util::quatRot(e.normalized(), n, std::arg(intrinData(i)));
+					Eigen::Vector3d e = mesh.edgevec(mesh.verts[i]->edge->pair).normalized();
+					e = kika::util::quatRot(e, n, std::arg(intrinData(i)));
 					append(lengths[i], p, n, e);
 				}
 			} else if (form == Fwise) {
@@ -331,7 +332,7 @@ public:
 				}
 			} else {}
 		} else {
-			lengths = kika::eig::zero2oneNorm(extrinData.rowwise().norm()).array() + baseLength;
+			lengths = (!uniformLength) * kika::eig::zero2oneNorm(extrinData.rowwise().norm()).array() + baseLength;
 
 			if (form == Vwise) {
 				for (size_t i = 0; i < s; i++) {

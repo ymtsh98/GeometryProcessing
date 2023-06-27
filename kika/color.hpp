@@ -558,6 +558,11 @@ inline ColorRamp blueRed() {
 	// return ColorRamp{ { 0x1012eeffu, 0xf3efe0ffu, 0xee1210ffu} };
 }
 
+inline ColorRamp whiteBlack() {
+	return ColorRamp{ { 0xffffffffu, 0x000000ffu } };
+	// return ColorRamp{ { 0x1012eeffu, 0xf3efe0ffu, 0xee1210ffu} };
+}
+
 /// -------------------- https://www.kennethmoreland.com/color-advice/  --------------------
 
 inline ColorRamp coolWarm() {
@@ -605,9 +610,9 @@ template <typename T>
 std::vector<std::array<double, 3>> scalar2color(const T& values, const ColorRamp& plt = palette::blueRed()) {
 	auto copy = values;
 	double min = *std::min_element(copy.begin(), copy.end());
-	for (auto& v : copy) v -= min;
+	for (auto v : copy) v -= min;
 	double max = *std::max_element(copy.begin(), copy.end());
-	for (auto& v : copy) v /= max;
+	for (auto v : copy) v /= max;
 	std::vector<std::array<double, 3>> colors(copy.size());
 	for (size_t i = 0; i < colors.size(); i++) {
 		fRGBA rgba = plt(copy[i]);
@@ -629,6 +634,19 @@ inline std::vector<std::array<double, 3>> gradation(const size_t n, const ColorR
 	return colors;
 }
 
+template<typename T, typename V = T::value_type, typename F = V::value_type>
+T waveColor(const T color, const int channel = 2, const F c = 16.) {
+	size_t n = color.size();
+	T wcolor(n);
+	if constexpr (util::IsStdvec<V>) wcolor.resize(n, V(3));
+	for (size_t i = 0; i < n; i++) {
+		wcolor[i][0] = cos(2.0 * std::numbers::pi_v<F> *c * color[i][0]);
+		wcolor[i][1] = cos(2.0 * std::numbers::pi_v<F> *c * color[i][1]);
+		wcolor[i][2] = cos(2.0 * std::numbers::pi_v<F> *c * color[i][2]);
+		wcolor[i][channel] = 1.0;
+	}
+	return wcolor;
+}
 }
 
 namespace {
@@ -637,327 +655,3 @@ std::ostream& operator<<(std::ostream& out, const kika::color::RGBA& c) {
 	return out;
 }
 }
-
-/// old version
-/*
-namespace kika::color::impl {
-
-template <typename T, class = void>
-struct IsColorScalar : std::false_type {};
-
-template <typename T>
-struct IsColorScalar<T, std::void_t<decltype(std::declval<T>().scalar)>> : std::true_type {};
-
-template <typename T>
-inline uint8_t scalar2u8(const T& scalar) {
-	if constexpr (std::is_scalar_v<T>) {
-		return static_cast<uint8_t>(std::max(std::min((uint32_t)scalar, 255u), 0u));
-	} else if constexpr (IsColorScalar<T>::value) {
-		return static_cast<uint8_t>(std::max(std::min((uint32_t)scalar.scalar, 255u), 0u));
-	} else {
-		static_assert(false && "scalar2u8");
-	}
-}
-
-template <class Derived>
-struct RGBBasicOp {
-protected:
-	template <typename T>
-	static auto scalar2u32float(const T& scalar) {
-		if constexpr (std::is_floating_point_v<T>) {
-			return scalar;
-		} else if constexpr (std::is_scalar_v<T>) {
-			return static_cast<uint32_t>(scalar);
-		} else if constexpr (IsColorScalar<T>::value) {
-			return static_cast<uint32_t>(scalar.scalar);
-		} else {
-			static_assert(false && "scalar2u32float");
-		}
-	}
-
-public:
-	template <typename T>
-	friend Derived operator+(const Derived& d, const T& scalar) {
-		return Derived(d.scalar + scalar2u32float(scalar));
-	}
-
-	template <typename T>
-	friend Derived operator-(const Derived& d, const T& scalar) {
-		return Derived(d.scalar - scalar2u32float(scalar));
-	}
-
-	template <typename T>
-	friend Derived operator*(const Derived& d, const T& scalar) {
-		return Derived(d.scalar * scalar2u32float(scalar));
-	}
-
-	template <typename T>
-	friend Derived operator/(const Derived& d, const T& scalar) {
-		return Derived(d.scalar / scalar2u32float(scalar));
-	}
-
-	template <typename T>
-	friend Derived operator%(const Derived& d, const T& scalar) {
-		return Derived(d.scalar % scalar2u32float(scalar));
-	}
-
-	template <typename T>
-	friend Derived& operator+=(Derived& d, const T& scalar) {
-		d.scalar += scalar2u32float(scalar);
-		return d;
-	}
-
-	template <typename T>
-	friend Derived& operator-=(Derived& d, const T& scalar) {
-		d.scalar -= scalar2u32float(scalar);
-		return d;
-	}
-
-	template <typename T>
-	friend Derived& operator*=(Derived& d, const T& scalar) {
-		d.scalar *= scalar2u32float(scalar);
-		return d;
-	}
-
-	template <typename T>
-	friend Derived& operator/=(Derived& d, const T& scalar) {
-		d.scalar /= scalar2u32float(scalar);
-		return d;
-	}
-
-	template <typename T>
-	friend Derived& operator%=(Derived& d, const T& scalar) {
-		d.scalar %= scalar2u32float(scalar);
-		return d;
-	}
-
-	friend Derived operator<<(const Derived& d, const size_t n) {
-		return Derived(d.scalar <<= n);
-	}
-
-	friend Derived operator>>(const Derived& d, const size_t n) {
-		return Derived(d.scalar >>= n);
-	}
-
-	friend Derived& operator<<=(Derived& d, const size_t n) {
-		d.scalar <<= n;
-		return d;
-	}
-
-	friend Derived& operator>>=(Derived& d, const size_t n) {
-		d.scalar >>= n;
-		return d;
-	}
-
-	template <typename T>
-	friend Derived operator&(const Derived& d, const T& scalar) {
-		return Derived(d.scalar & scalar2u8(scalar));
-	}
-
-	template <typename T>
-	friend Derived operator^(const Derived& d, const T& scalar) {
-		return Derived(d.scalar ^ scalar2u8(scalar));
-	}
-
-	template <typename T>
-	friend Derived operator|(const Derived& d, const T& scalar) {
-		return Derived(d.scalar | scalar2u8(scalar));
-	}
-
-	template <typename T>
-	friend Derived& operator&=(Derived& d, const T& scalar) {
-		d.scalar &= scalar2u8(scalar);
-		return d;
-	}
-
-	template <typename T>
-	friend Derived& operator^=(Derived& d, const T& scalar) {
-		d.scalar ^= scalar2u8(scalar);
-		return d;
-	}
-
-	template <typename T>
-	friend Derived& operator|=(Derived& d, const T& scalar) {
-		d.scalar |= scalar2u8(scalar);
-		return d;
-	}
-
-	template <typename T>
-	friend bool operator<(const Derived& d, const T& scalar) {
-		return d.scalar < scalar2u8(scalar);
-	}
-
-	template <typename T>
-	friend bool operator>(const Derived& d, const T& scalar) {
-		return scalar2u8(scalar) < d.scalar;
-	}
-
-	template <typename T>
-	friend bool operator<=(const Derived& d, const T& scalar) {
-		return !(d.scalar > scalar2u8(scalar));
-	}
-
-	template <typename T>
-	friend bool operator>=(const Derived& d, const T& scalar) {
-		return !(d.scalar < scalar2u8(scalar));
-	}
-
-	template <typename T>
-	friend bool operator==(const Derived& d, const T& scalar) {
-		return d.scalar == scalar2u8(scalar);
-	}
-
-	template <typename T>
-	friend bool operator!=(const Derived& d, const T& scalar) {
-		return !(d == scalar);
-	}
-
-	template <typename T>
-	friend bool operator&&(const Derived& d, const T& scalar) {
-		return d.scalar && scalar2u8(scalar);
-	}
-
-	template <typename T>
-	friend bool operator||(const Derived& d, const T& scalar) {
-		return d.scalar || scalar2u8(scalar);
-	}
-
-};
-
-struct Red : public RGBBasicOp<Red> {
-	uint8_t scalar;
-
-	Red() : scalar(0u) {}
-	template <typename T>
-	Red(T scalar) : scalar(scalar2u8(scalar)) {}
-
-	template <typename T>
-	Red& operator=(const T& v)& {
-		this->scalar = scalar2u8(v);
-		return *this;
-	}
-
-	friend std::ostream& operator<<(std::ostream& out, const Red& test) {
-		out << std::to_string(test.scalar);
-		return out;
-	}
-};
-
-struct Green : public RGBBasicOp<Green> {
-	uint8_t _dummy1{}, scalar;
-
-	Green() : scalar(0u) {}
-	template <typename T>
-	Green(T scalar) : scalar(scalar2u8(scalar)) {}
-
-	template <typename T>
-	Green& operator=(const T& v)& {
-		this->scalar = scalar2u8(v);
-		return *this;
-	}
-
-	friend std::ostream& operator<<(std::ostream& out, const Green& test) {
-		out << std::to_string(test.scalar);
-		return out;
-	}
-};
-
-struct Blue : public RGBBasicOp<Blue> {
-	uint8_t _dummy1{}, _dummy2{}, scalar;
-
-	Blue() : scalar(0u) {}
-	template <typename T>
-	Blue(T scalar) : scalar(scalar2u8(scalar)) {}
-
-	template <typename T>
-	Blue& operator=(const T& v)& {
-		this->scalar = scalar2u8(v);
-		return *this;
-	}
-
-	friend std::ostream& operator<<(std::ostream& out, const Blue& test) {
-		out << std::to_string(test.scalar);
-		return out;
-	}
-};
-
-struct Alpha : public RGBBasicOp<Alpha> {
-	uint8_t _dummy1{}, _dummy2{}, _dummy3{}, scalar;
-
-	Alpha() : scalar(0u) {}
-	template <typename T>
-	Alpha(T scalar) : scalar(scalar2u8(scalar)) {}
-
-	template <typename T>
-	Alpha& operator=(const T& v)& {
-		this->scalar = scalar2u8(v);
-		return *this;
-	}
-
-	friend std::ostream& operator<<(std::ostream& out, const Alpha& test) {
-		out << std::to_string(test.scalar);
-		return out;
-	}
-};
-
-}
-
-namespace kika::color {
-union RGBA {
-	uint32_t hex; // a-b-g-r 0xa1a2_b1b2_g1g2_r1r2
-	std::array<uint8_t, 4> dec; // rgba
-	std::array<uint8_t, 3> rgb; // rgb
-
-	impl::Red r;
-	impl::Green g;
-	impl::Blue b;
-	impl::Alpha a;
-
-	RGBA() : dec({ 0u, 0u, 0u, 255u }) {}
-	RGBA(uint32_t rgba) {
-		*this = rgba;
-	}
-
-	template <typename T, class = std::enable_if_t<!std::is_scalar_v<T>, void>>
-	RGBA(T rgba) {
-		int i = 0;
-		for (auto itr = rgba.begin(); itr != rgba.end(); ++itr) {
-			dec[i++] = impl::scalar2u8(*itr);
-		}
-		for (; i < 3; i++) dec[i] = 0u;
-		for (; i < 4; i++) dec[i] = 255u;
-	}
-
-	template <typename R, typename G, typename B, typename A=uint8_t>
-	RGBA(R r, G g, B b, A a = 255u) {
-		dec[0] = impl::scalar2u8(r);
-		dec[1] = impl::scalar2u8(g);
-		dec[2] = impl::scalar2u8(b);
-		dec[3] = impl::scalar2u8(a);
-	}
-
-	RGBA& operator=(uint32_t rgba)& {
-		dec[3] = (rgba >> 0u) & 0xffu;
-		dec[2] = (rgba >> 8u) & 0xffu;
-		dec[1] = (rgba >> 16u) & 0xffu;
-		dec[0] = (rgba >> 24u) & 0xffu;
-		return *this;
-	}
-
-	friend std::ostream& operator<<(std::ostream& out, const RGBA& rgba) {
-		out << "(" << rgba.r << "," << rgba.g << "," << rgba.b << "," << rgba.a << ")";
-		return out;
-	}
-
-	friend RGBA operator*(const RGBA& color, const double t) {
-		return RGBA(color.r * t, color.g * t, color.b * t, color.a * t);
-	}
-
-	friend RGBA operator+(const RGBA& color, const RGBA& other) {
-		return RGBA(color.r + other.r, color.g + other.g, color.b + other.b, color.a + other.a);
-	}
-
-};
-
-}
-*/

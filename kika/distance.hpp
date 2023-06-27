@@ -240,7 +240,7 @@ class FastMarchingSolver : public GeodesicSolver {
 			arrived[v] = true;
 
 			for (const auto& e : mesh.get().verts[v]->incidentEdges<heds::Ptr>()) {
-				if (e->isBoundary()) continue;
+				if (e->face == nullptr) continue;
 				auto u = e->next->vert->id;
 				auto k = e->prev()->vert->id;
 

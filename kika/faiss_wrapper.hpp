@@ -38,9 +38,9 @@ public:
 		index.nprobe = nprobe;
 	}
 
-	template <typename Derived, int Rows = Derived::RowsAtCompileTime, int Cols = Derived::ColsAtCompileTime>
+	template <typename T = size_t, typename Derived, int Rows = Derived::RowsAtCompileTime, int Cols = Derived::ColsAtCompileTime>
 	void getKNearestNeighbors(const Eigen::DenseBase<Derived>& pts, const size_t k,
-		std::vector<std::vector<size_t>>& indices, std::vector<std::vector<float>>& dists) {
+		std::vector<std::vector<T>>& indices, std::vector<std::vector<float>>& dists) {
 		size_t n = (size_t)pts.rows();
 		Eigen::Matrix<float, Rows, Cols, Eigen::RowMajor> tmp(pts.cast<float>());
 		std::vector<faiss::Index::idx_t> indices_(k * n);
@@ -49,18 +49,18 @@ public:
 		if constexpr (TRAIN) index.search((faiss::Index::idx_t)n, tmp.data(), k, dists_.data(), indices_.data());
 		else quantizer.search((faiss::Index::idx_t)n, tmp.data(), k, dists_.data(), indices_.data());
 
-		indices.resize(n, std::vector<size_t>(k));
+		indices.resize(n, std::vector<T>(k));
 		dists.resize(n, std::vector<float>(k));
 		for (size_t i = 0; i < n; i++) {
 			for (size_t j = 0; j < k; j++) {
-				indices[i][j] = static_cast<size_t>(indices_[i * k + j]);
+				indices[i][j] = static_cast<T>(indices_[i * k + j]);
 				dists[i][j] = dists_[i * k + j];
 			}
 		}
 	}
 
-	template <typename Derived, int Rows = Derived::RowsAtCompileTime, int Cols = Derived::ColsAtCompileTime>
-	std::vector<std::vector<size_t>> getRNearestNeighbors(const Eigen::DenseBase<Derived>& pts, const float r) {
+	template <typename T = size_t, typename Derived, int Rows = Derived::RowsAtCompileTime, int Cols = Derived::ColsAtCompileTime>
+	std::vector<std::vector<T>> getRNearestNeighbors(const Eigen::DenseBase<Derived>& pts, const float r) {
 		int n = (int)pts.rows();
 		Eigen::Matrix<float, Rows, Cols, Eigen::RowMajor> tmp(pts.cast<float>());
 
@@ -68,15 +68,14 @@ public:
 		if constexpr (TRAIN) index.range_search(n, tmp.data(), r, result);
 		else quantizer.range_search(n, tmp.data(), r, result);
 
-		std::vector<std::vector<size_t>> indices(n);
+		std::vector<std::vector<T>> indices(n);
 		for (int i = 0; i < n; i++) {
 			auto l = result->lims[i], r = result->lims[i + 1];
 			indices[i].resize(r - l);
 			for (size_t j = l, k = 0; j < r; j++, k++) {
-				indices[i][k] = static_cast<size_t>(result->labels[j]);
+				indices[i][k] = static_cast<T>(result->labels[j]);
 			}
 		}
-
 
 		//std::cout <<  result->buffer_size << std::endl;
 		//std::cout << result->lims[0] << " " << result->lims[1] << std::endl;
@@ -102,23 +101,25 @@ public:
 		else quantizer.search(n, tmp.data(), 1, dists.data(), indices.data());
 	}
 
-	template <typename Derived>
-	std::vector<faiss::Index::idx_t> getNearestNeighbors(const Eigen::DenseBase<Derived>& pts) {
+	template <typename T = faiss::Index::idx_t, typename Derived>
+	std::vector<T> getNearestNeighbors(const Eigen::DenseBase<Derived>& pts) {
 		std::vector<faiss::Index::idx_t> indices;
 		std::vector<float> dists;
 
 		getNearestNeighbors(pts, indices, dists);
 
-		return indices;
+		if constexpr (std::is_same_v<T, faiss::Index::idx_t>)
+			return indices;
+		else
+			return util::vecast<T>(indices);
 	}
 
-	template <typename Derived1, typename Derived2>
-	static std::vector<faiss::Index::idx_t> nearestNeighbors(
+	template <typename T = faiss::Index::idx_t, typename Derived1, typename Derived2>
+	static std::vector<T> nearestNeighbors(
 		const Eigen::DenseBase<Derived1>& src,
 		const Eigen::DenseBase<Derived2>& trg,
 		const size_t ncells = 100, const size_t nprobe = 1) {
-		auto tree = FaissKNN<TRAIN>(src, ncells, nprobe);
-		return tree.getNearestNeighbors(trg);
+		return FaissKNN<TRAIN>(src, ncells, nprobe).getNearestNeighbors<T>(trg);
 	}
 
 };

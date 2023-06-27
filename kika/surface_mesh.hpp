@@ -233,31 +233,31 @@ public:
 		return SurfaceMesh(c, dfaces);
 	}
 
-	bool isDelaunayMesh() const {
+	bool isDelaunayMesh(const double eps = 1e-8) const {
 		for (const auto& edge : edges) {
-			if (edge->isBoundary() || edge->isK4<true, false>()) continue;
+			if (edge->isBoundary() || edge->isK4<true, false>() || edge->isTet()) continue;
 
 			double alpha = angle(edge->next->pair, edge->next->next);
 			double beta = angle(edge->pair->next->pair, edge->pair->next->next);
 
-			if ((alpha + beta) > std::numbers::pi) return false;
+			if ((alpha + beta) > std::numbers::pi + eps) return false;
 		}
 		return true;
 	}
 
 	// do edge flip while mesh has un-delaunay triangles (without boundary)
-	void delaunayEdgeFlip() {
+	void delaunayEdgeFlip(const double eps = 1e-8) {
 		bool flip = true;
 		while (flip) {
 			static int counter = 0;
 			flip = false;
 			for (auto& edge : edges) {
-				if (edge->isBoundary() || edge->isK4<true, false>()) continue;
+				if (edge->isBoundary() || edge->isK4<true, false>() || edge->isTet()) continue;
 
 				double alpha = angle(edge->next->pair, edge->next->next);
 				double beta = angle(edge->pair->next->pair, edge->pair->next->next);
 
-				if ((alpha + beta) > std::numbers::pi) {
+				if ((alpha + beta) > std::numbers::pi + eps) {
 					edge->flip();
 					flip = true;
 				}
@@ -266,9 +266,9 @@ public:
 	}
 
 	// get delaynay mesh
-	SurfaceMesh delaunayMesh() const {
+	SurfaceMesh delaunayMesh(const double eps = 1e-6) const {
 		auto mesh = triangleMesh();
-		mesh.delaunayEdgeFlip();
+		mesh.delaunayEdgeFlip(eps);
 		return mesh;
 	}
 
@@ -297,6 +297,60 @@ public:
 
 	SurfaceMesh triangleMesh() const {
 		return SurfaceMesh(pos, util::faces2indices(faceList()));
+	}
+
+	template <typename T = uint32_t>
+	std::pair<SurfaceMesh, std::map<uint32_t, uint32_t>> mask(const std::vector<T>& maskFacesIndex) const {
+		std::vector<uint32_t> maskVerts;
+		std::map<uint32_t, uint32_t> vertexMap;
+
+		std::vector<std::vector<uint32_t>> maskFaces(maskFacesIndex.size());
+		for (size_t i = 0; i < maskFacesIndex.size(); i++) {
+			maskFaces[i] = faces[maskFacesIndex[i]]->circuitVerts();
+		}
+
+		for (size_t i = 0, counter = 0; i < maskFaces.size(); i++) {
+			for (auto& v : maskFaces[i]) {
+				if (!vertexMap.contains(v)) {
+					maskVerts.emplace_back(v);
+					vertexMap[v] = counter++;
+				}
+				v = vertexMap[v];
+			}
+		}
+
+		return { SurfaceMesh(pos(maskVerts, Eigen::all), maskFaces), vertexMap };
+	}
+
+
+	inline double intrinsicAngle(const size_t v, Eigen::Vector3d ref) {
+		auto normal = this->normal(verts[v]);
+		ref = kika::util::project2plane(ref, normal);
+
+		auto&& edges = verts[v]->incidentEdges<kika::heds::Ptr, kika::heds::CCW>();
+
+		size_t minIndex = 0;
+		double minAngle = 100.;
+
+		for (size_t i = 0; i < edges.size(); i++) {
+			Eigen::Vector3d e = - this->edgevec(edges[i]);
+			double angle = kika::util::angle(e, ref, normal);
+			if (fabs(angle) < minAngle) {
+				minAngle = fabs(angle);
+				minIndex = i;
+			}
+		}
+
+		double theta = 0.0;
+		Eigen::Vector3d e0 = - this->edgevec(edges[0]);
+		for (size_t i = 1; i < minIndex; i++) {
+			Eigen::Vector3d e = - this->edgevec(edges[i]);
+			double angle = kika::util::angle(e0, e, normal);
+			theta += angle;
+			e0 = e;
+		}
+
+		return theta + kika::util::angle(e0, ref, normal);
 	}
 };
 

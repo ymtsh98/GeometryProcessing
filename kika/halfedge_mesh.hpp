@@ -129,6 +129,9 @@ public:
 	template <bool InnerTest = true, bool OuterTest = true>
 	bool isK4() const;
 
+	// check this edge part of tetrahedral
+	bool isTet() const;
+
 	// edge flip
 	void flip();
 
@@ -199,7 +202,7 @@ Ret Vertex::oneringNeighbs() const {
 	} while (e != this->edge && e->face != nullptr);
 	if (e->face == nullptr) impl::appendIdxOrPtr<Type>(neighbs, e->pair->vert);
 
-	if constexpr (Order == CCW) std::reverse(neighbs.begin(), neighbs.end());
+	if constexpr (Order == CCW) std::reverse(neighbs.begin() + 1, neighbs.end());
 	return neighbs;
 }
 
@@ -216,7 +219,7 @@ Ret Vertex::incidentEdges() const {
 	} while (e != this->edge && e->face != nullptr);
 	if (e->face == nullptr) impl::appendIdxOrPtr<Type>(edges, e);
 
-	if constexpr (Order == CCW) std::reverse(edges.begin(), edges.end());
+	if constexpr (Order == CCW) std::reverse(edges.begin() + 1, edges.end());
 	return edges;
 }
 
@@ -232,7 +235,7 @@ Ret Vertex::adjacentFaces() const {
 		e = e->next->pair;
 	} while (e != this->edge && e->face != nullptr);
 
-	if constexpr (Order == CCW) std::reverse(faces.begin(), faces.end());
+	if constexpr (Order == CCW) std::reverse(faces.begin() + 1, faces.end());
 	return faces;
 }
 
@@ -392,6 +395,16 @@ bool Halfedge::isK4() const {
 	return false;
 }
 
+// check this edge part of tetrahedral
+inline bool Halfedge::isTet() const {
+	auto&& ov = next->vert->oneringNeighbs();
+	auto& u = pair->next->vert->id;
+	for (const auto& v : ov) {
+		if (v == u) return true;
+	}
+	return false;
+}
+
 // edge flip
 inline void Halfedge::flip() {
 	if (isBoundary()) return;
@@ -440,7 +453,7 @@ Ret Face::circuitVerts() const {
 		e = e->next;
 	} while (e != this->edge);
 
-	if constexpr (Order == CW) std::reverse(verts.begin(), verts.end());
+	if constexpr (Order == CW) std::reverse(verts.begin() + 1, verts.end());
 	return verts;
 }
 
@@ -456,7 +469,7 @@ Ret Face::circuitEdges() const {
 		e = e->next;
 	} while (e != this->edge);
 
-	if constexpr (Order == CW) std::reverse(edges.begin(), edges.end());
+	if constexpr (Order == CW) std::reverse(edges.begin() + 1, edges.end());
 	return edges;
 }
 
@@ -473,7 +486,7 @@ Ret Face::adjacentFaces() const {
 		e = e->next;
 	} while (e != this->edge);
 
-	if constexpr (Order == CW) std::reverse(faces.begin(), faces.end());
+	if constexpr (Order == CW) std::reverse(faces.begin() + 1, faces.end());
 	return faces;
 }
 
@@ -747,6 +760,7 @@ public:
 		return flist;
 	}
 
+	// k ring neighbors
 	template <typename T = uint32_t>
 	std::vector<T> kRingNeighbs(const size_t src, const size_t k) const {
 		std::vector<T> neighbs;
@@ -1123,6 +1137,29 @@ public:
 
 	HalfedgeMesh triangleMesh() const {
 		return HalfedgeMesh(getNumVerts(), util::faces2indices(faceList()));
+	}
+
+	template <typename T = uint32_t>
+	std::pair<HalfedgeMesh, std::map<uint32_t, uint32_t>> mask(const std::vector<T>& maskFacesIndex) const {
+		std::vector<uint32_t> maskVerts;
+		std::map<uint32_t, uint32_t> vertexMap;
+
+		std::vector<std::vector<uint32_t>> maskFaces(maskFacesIndex.size());
+		for (size_t i = 0; i < maskFacesIndex.size(); i++) {
+			maskFaces[i] = faces[maskFacesIndex[i]]->circuitVerts();
+		}
+
+		for (size_t i = 0, counter = 0; i < maskFaces.size(); i++) {
+			for (auto& v : maskFaces[i]) {
+				if (!vertexMap.contains(v)) {
+					maskVerts.emplace_back(v);
+					vertexMap[v] = counter++;
+				}
+				v = vertexMap[v];
+			}
+		}
+
+		return { HalfedgeMesh(maskVerts.size(), maskFaces), vertexMap };
 	}
 
 };
