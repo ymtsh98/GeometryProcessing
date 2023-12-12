@@ -323,7 +323,7 @@ public:
 	}
 
 	void save(const std::string_view fname, const bool clear = true) {
-		std::ofstream out(fname);
+		std::ofstream out(fname.data());
 		out.write(wr.data(), wr.size());
 		out.close();
 

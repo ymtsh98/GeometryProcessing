@@ -1,6 +1,7 @@
 #pragma once
-
+#include <kika/kikautil.hpp>
 #include <kika/halfedge_mesh.hpp>
+#include <kika/eigutil.hpp>
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
@@ -10,13 +11,24 @@ class SurfaceMesh : public HalfedgeMesh {
 public:
   Eigen::MatrixX3d pos;
 
-  SurfaceMesh() : pos(), HalfedgeMesh() {}
+  SurfaceMesh() : HalfedgeMesh(), pos() {}
 
 	/// surface mesh
 	// @param pos	: positions (Eigen::MatrixX3d)
 	// @param faceAttrib	: faces list (2d) or index list (1d)
 	template<typename T>
-	SurfaceMesh(const Eigen::MatrixX3d& pos, const T& faceAttrib) : pos(pos), HalfedgeMesh(pos.rows(), faceAttrib) { }
+	SurfaceMesh(const Eigen::MatrixX3d& pos, const T& faceAttrib) { 
+		build(pos, faceAttrib);
+	}
+
+	/// surface mesh
+	// @param pos	: positions (convert to Eigen::MatrixX3d)
+	// @param faceAttrib	: faces list (2d) or index list (1d)
+	template<typename V, typename T>
+	SurfaceMesh(const std::vector<V>& vpos, const T& faceAttrib) {
+		this->pos = eig::vec2eig<3>(vpos);
+		build(this->pos, faceAttrib);
+	}
 
 	SurfaceMesh(const SurfaceMesh& mesh) {
 		build(mesh.pos, mesh.faceList());
@@ -37,6 +49,67 @@ public:
 		HalfedgeMesh::build(pos.rows(), faceAttrib);
 	}
 
+	// resolve non-manifold condition vertices
+	// check all vertex and edges
+	void cleanVertices() override final {
+		uint32_t n = (uint32_t)getNumVerts();
+		pos.conservativeResize(n, 3);
+
+		// find condition: edge has more than 3 faces (already checked as vertex index), unreference vertex
+
+		bool existUnref = false;
+		for (uint32_t i = 0; i < n; i++) {
+			if (verts[i]->id != i) {
+				pos.row(i) = pos.row(verts[i]->id);
+				verts[i]->id = i;
+			}
+
+			existUnref |= verts[i]->isUnrefer();
+		}
+
+		if (existUnref) pos = pos(removeUnrefVerts(), Eigen::all);
+
+		// find condition: an one-ring neighborhood is not a homeomorphism of the disk
+
+		std::vector<bool> earrived(2 * getNumEdges(), false);
+		std::vector<bool> varrived(getNumVerts(), false);
+		std::vector<pte> duplicate;
+
+		for (const auto& edge : edges) {
+			if (earrived[edge->id]) continue;
+
+			auto e = edge, e0 = e;
+			do {
+				earrived[e->id] = true;
+				e = e->next->pair;
+			} while (e != e0 && e->face != nullptr);
+
+			if (!edge->isBoundary()) {
+				if (e->face != nullptr) varrived[edge->vert->id] = true;
+				continue;
+			}
+
+			if (varrived[edge->vert->id]) duplicate.emplace_back(edge);
+			varrived[edge->vert->id] = true;
+		}
+
+		if (duplicate.size() == 0) return;
+
+		pos.conservativeResize(pos.rows() + duplicate.size(), 3);
+
+		for (auto& edge : duplicate) {
+			pos.row(verts.size()) = pos.row(edge->vert->id);
+			verts.emplace_back(make<Vertex>((uint32_t)verts.size()));
+			verts.back()->edge = edge;
+			edge->vert = verts.back();
+
+			auto e = edge, e0 = e;
+			do {
+				e->vert = verts.back();
+			} while (e != e0 && e->face != nullptr);
+			if (e->face == nullptr) e->vert = verts.back();
+		}
+	}
 
 	// --------------- geometry ---------------------
 
@@ -159,7 +232,8 @@ public:
 	
 	Eigen::VectorXd edgeLengths() const {
 		Eigen::VectorXd lengths(getNumEdges());
-		for (size_t i = 0; i < edges.size(); i++) {
+		#pragma omp parallel for
+		for (int i = 0; i < (int)edges.size(); i++) {
 			lengths[i] = length(edges[i]);
 		}
 		return lengths;
@@ -170,12 +244,33 @@ public:
 		return edgeLengths().mean();
 	}
 
+	// maximum edge length
+	double maxEdgeLength() const {
+		return edgeLengths().maxCoeff();
+	}
+
+	// maximum length of face diagnoal
+	double maxDiagLength() const {
+		double diag = 0.;
+		for (size_t i = 0; i < getNumFaces(); i++) {
+			auto&& vs = faces[i]->circuitVerts();
+			Eigen::MatrixX3d p = pos(vs, Eigen::all);
+			for (size_t j = 0; j < vs.size(); j++) {
+				for (size_t k = j + 1; k < vs.size(); k++) {
+					diag = std::max(diag, (p.row(j) - p.row(k)).norm());
+				}
+			}
+		}
+
+		return diag;
+	}
 
 	// surface area
 	double surfaceArea() const {
 		double s = 0.0;
-		for (const auto& face : faces) {
-			s += area(face);
+		#pragma omp parallel for reduction(+:s)
+		for (int i = 0; i < (int)getNumFaces(); i++) {
+			s += area(faces[i]);
 		}
 		return s;
 	}
@@ -247,20 +342,28 @@ public:
 
 	// do edge flip while mesh has un-delaunay triangles (without boundary)
 	void delaunayEdgeFlip(const double eps = 1e-8) {
+		std::vector<bool> isDelaunayEdge(getNumEdges(), false);
+
 		bool flip = true;
 		while (flip) {
-			static int counter = 0;
 			flip = false;
 			for (auto& edge : edges) {
+				auto i = edge->uid();
+				if (isDelaunayEdge[i]) continue;
 				if (edge->isBoundary() || edge->isK4<true, false>() || edge->isTet()) continue;
-
+			
 				double alpha = angle(edge->next->pair, edge->next->next);
 				double beta = angle(edge->pair->next->pair, edge->pair->next->next);
-
+			
 				if ((alpha + beta) > std::numbers::pi + eps) {
 					edge->flip();
 					flip = true;
-				}
+					isDelaunayEdge[edge->next->uid()] = false;
+					isDelaunayEdge[edge->next->next->uid()] = false;
+					isDelaunayEdge[edge->pair->next->uid()] = false;
+					isDelaunayEdge[edge->pair->next->next->uid()] = false;
+				} 
+				isDelaunayEdge[i] = true;
 			}
 		}
 	}
@@ -296,13 +399,25 @@ public:
 	}
 
 	SurfaceMesh triangleMesh() const {
-		return SurfaceMesh(pos, util::faces2indices(faceList()));
+		SurfaceMesh copy = *this;
+		copy.triangulate();
+		return copy;
 	}
 
+	// return closed mesh (hole filling)
+	SurfaceMesh closedMesh() const {
+		SurfaceMesh copy = *this;
+		copy.fileHoles();
+		return copy;
+	}
+
+	/// @return vertex-map : original mesh vertex index -> masked mesh vertex index
+	/// vmap[100] -> 0, vmap[2000] -> 1
 	template <typename T = uint32_t>
-	std::pair<SurfaceMesh, std::map<uint32_t, uint32_t>> mask(const std::vector<T>& maskFacesIndex) const {
+	std::tuple<SurfaceMesh, std::map<uint32_t, uint32_t>, std::vector<uint32_t>> fmask(const std::vector<T>& maskFacesIndex) const {
 		std::vector<uint32_t> maskVerts;
 		std::map<uint32_t, uint32_t> vertexMap;
+		maskVerts.reserve(getNumVerts());
 
 		std::vector<std::vector<uint32_t>> maskFaces(maskFacesIndex.size());
 		for (size_t i = 0; i < maskFacesIndex.size(); i++) {
@@ -319,9 +434,59 @@ public:
 			}
 		}
 
-		return { SurfaceMesh(pos(maskVerts, Eigen::all), maskFaces), vertexMap };
+		return { SurfaceMesh(pos(maskVerts, Eigen::all), maskFaces), vertexMap, maskVerts };
 	}
 
+	/// @tparam AllOf : mask faces whitch all of vertex in maskVertsIndex
+	/// @return vertex-map : original mesh vertex index -> masked mesh vertex index
+	/// vmap[100] -> 0, vmap[2000] -> 1
+	template <bool AllOf = true, typename T = uint32_t>
+	std::tuple<SurfaceMesh, std::map<uint32_t, uint32_t>, std::vector<uint32_t>> vmask(const std::vector<T>& maskVertsIndex) const {
+		std::vector<uint32_t> maskVerts;
+		std::map<uint32_t, uint32_t> vertexMap;
+		maskVerts.reserve(getNumVerts());
+
+		std::vector<bool> checked(getNumVerts(), false);
+		for (const auto& i : maskVertsIndex) checked[i] = true;
+
+		std::vector<std::vector<uint32_t>> maskFaces;
+		maskFaces.reserve(maskVertsIndex.size() * 2);
+
+		uint32_t counter = 0;
+		if constexpr (AllOf) {
+			for (const auto& face : faces) {
+				auto&& vs = face->circuitVerts();
+				if (std::all_of(vs.begin(), vs.end(), [&checked](uint32_t v) { return checked[v]; })) {
+					maskFaces.emplace_back(vs);
+
+					for (auto& v : maskFaces.back()) {
+						if (!vertexMap.contains(v)) {
+							maskVerts.emplace_back(v);
+							vertexMap[v] = counter++;
+						}
+						v = vertexMap[v];
+					}
+				}
+			}
+		} else {
+			for (const auto& face : faces) {
+				auto&& vs = face->circuitVerts();
+				if (std::any_of(vs.begin(), vs.end(), [&checked](uint32_t v) { return checked[v]; })) {
+					maskFaces.emplace_back(vs);
+
+					for (auto& v : maskFaces.back()) {
+						if (!vertexMap.contains(v)) {
+							maskVerts.emplace_back(v);
+							vertexMap[v] = counter++;
+						}
+						v = vertexMap[v];
+					}
+				}
+			}
+		}
+
+		return { SurfaceMesh(pos(maskVerts, Eigen::all), maskFaces), vertexMap, maskVerts };
+	}
 
 	inline double intrinsicAngle(const size_t v, Eigen::Vector3d ref) {
 		auto normal = this->normal(verts[v]);

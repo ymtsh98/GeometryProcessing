@@ -18,6 +18,14 @@ protected:
 public:
 	GeodesicSolver(const heds::SurfaceMesh& mesh) : mesh(mesh) {}
 
+	GeodesicSolver(const gd::GeodesicSolver& solver) : mesh(solver.mesh), path(solver.path) {}
+
+	GeodesicSolver& operator=(const GeodesicSolver& solver) {
+		mesh = solver.mesh;
+		path = solver.path;
+		return *this;
+	}
+
 	// get distance vector
 	Eigen::VectorXd dist() const {
 		Eigen::VectorXd dist(mesh.get().getNumVerts());
@@ -152,6 +160,14 @@ public:
 	/// @param mesh : surface mesh
 	DijkstraSolver(const heds::SurfaceMesh& mesh) : GeodesicSolver(mesh) {}
 
+	DijkstraSolver(const gd::DijkstraSolver& solver) : GeodesicSolver(solver.mesh) {}
+
+	DijkstraSolver& operator=(const DijkstraSolver& solver) {
+		mesh = solver.mesh;
+		path = solver.path;
+		return *this;
+	}
+
 	template <typename T = uint32_t>
 	DijkstraSolver& solve(const std::vector<T>& src,
 		const uint32_t trg = std::numeric_limits<uint32_t>::max(),
@@ -263,7 +279,7 @@ class FastMarchingSolver : public GeodesicSolver {
 	}
 
 	#if false
-	// TODO : bug
+	// TODO : bug fix
 	template <typename T = uint32_t>
 	std::vector<std::pair<double, uint32_t>> aStarPath(const std::vector<T>& src,
 		const uint32_t trg = std::numeric_limits<uint32_t>::max(),
@@ -333,7 +349,14 @@ class FastMarchingSolver : public GeodesicSolver {
 public:
 
 	// fast marching geodesic distance
-	FastMarchingSolver(const heds::SurfaceMesh& mesh) : GeodesicSolver(mesh) {
+	FastMarchingSolver(const heds::SurfaceMesh& mesh) : GeodesicSolver(mesh) {}
+
+	FastMarchingSolver(const gd::FastMarchingSolver& solver) : FastMarchingSolver(solver.mesh.get()) {}
+
+	FastMarchingSolver& operator=(const FastMarchingSolver& solver) {
+		mesh = solver.mesh;
+		path = solver.path;
+		return *this;
 	}
 
 	template <typename T = uint32_t>
@@ -354,12 +377,12 @@ public:
 class VirtualSourceSolver {
 	std::reference_wrapper<const heds::SurfaceMesh> mesh;
 
+	double ael;
 	std::vector<double> face2centerDist;
 	std::vector<double> face2extraDist;
 	std::vector<double> edgeLength;
 	std::vector<double> edge2vertexDist;
 	std::vector<bool> behindMask;
-	double ael;
 	Eigen::VectorXd distance;
 
 	void computeAel() {
@@ -404,31 +427,43 @@ class VirtualSourceSolver {
 				edge2vertexDist[h2] = std::min(edge2vertexDist[h2], 0.0);
 				edge2vertexDist[h0] = std::min(edge2vertexDist[h0], util::pow2(d0));
 				edge2vertexDist[h1] = std::min(edge2vertexDist[h1], util::pow2(d2));
-
+				
 				auto f = e0->face->id;
 				face2extraDist[f] = 0.0;
 				face2centerDist[f] = std::min(face2centerDist[f], (centroid - p2).norm());
 				searchMain.emplace_back(e1);
 			}
+			distance[s] = 0.;
 			arrived[s] = true;
 		}
 	}
 
 	void computeVwiseDist() {
 		int nv = (int)mesh.get().getNumVerts();
-		distance.resize(nv);
+		// distance = Eigen::VectorXd::Constant(nv, std::numeric_limits<double>::max());
+		
+		// auto& edges = mesh.get().edges;
+		// int ne = (int)edges.size();
+		// for (int i = 0; i < ne; i++) {
+		// 	const auto& edge = edges[i], pair = edge->pair;
+		// 	auto v = edge->vert->id, u = pair->vert->id;
+		// 	double dv = face2extraDist[edge->face->id] + sqrt(edge2vertexDist[edge->id]);
+		// 	double du = pair->face == nullptr ? std::numeric_limits<double>::max() : (face2extraDist[pair->face->id] + sqrt(edge2vertexDist[pair->id]));
+		// 	
+		// 	distance[v] = std::min(distance[v], dv);
+		// 	distance[u] = std::min(distance[u], du);
+		// }
 
 		#pragma omp parallel for
 		for (int i = 0; i < nv; i++) {
 			double mindist = std::numeric_limits<double>::max();
-
+		
 			for (const auto& e : mesh.get().verts[i]->incidentEdges<heds::Ptr>()) {
 				if (e->face == nullptr) continue;
 				double d = edge2vertexDist[e->id];
-
 				mindist = std::min(mindist, face2extraDist[e->face->id] + sqrt(d));
 			}
-
+		
 			distance(i) = mindist;
 		}
 	}
@@ -440,8 +475,23 @@ public:
 		computeAel();
 	}
 
+	// Virtual source propagation (triangle mesh)
+	VirtualSourceSolver(const heds::SurfaceMesh& mesh, const double ael, const std::vector<double>& edgeLength) : mesh(mesh), ael(ael), edgeLength(edgeLength) {
+	}
+
+	VirtualSourceSolver(const gd::VirtualSourceSolver& solver) : mesh(solver.mesh), ael(solver.ael), edgeLength(solver.edgeLength), distance(solver.distance) {}
+
+	VirtualSourceSolver& operator=(const VirtualSourceSolver& solver) {
+		mesh = solver.mesh;
+		ael = solver.ael;
+		edgeLength = edgeLength;
+		distance = solver.distance;
+		return *this;
+	}
+
 	template <typename T = uint32_t>
-	VirtualSourceSolver& solve(const std::vector<T>& src, const bool resetAel = false) {
+	VirtualSourceSolver& solve(const std::vector<T>& src, const uint32_t trg = std::numeric_limits<uint32_t>::max(),
+		const double limit = std::numeric_limits<double>::max(), const bool resetAel = false) {
 		constexpr double THRESHOLD_c = 5.1424;
 		constexpr double THRESHOLD_g = 4.20638;
 		constexpr double THRESHOLD_h = 0.504201;
@@ -454,20 +504,27 @@ public:
 
 		if (resetAel) computeAel();
 		int nf = (int)mesh.get().getNumFaces(), ne = (int)mesh.get().getNumEdges();
-		face2centerDist.clear();
+		//face2centerDist.clear();
 		face2centerDist.resize(nf, std::numeric_limits<double>::max());
-		face2extraDist.clear();
+		std::fill(face2centerDist.begin(), face2centerDist.end(), std::numeric_limits<double>::max());
+		//face2extraDist.clear();
 		face2extraDist.resize(nf, 0.);
-		edge2vertexDist.clear();
+		std::fill(face2extraDist.begin(), face2extraDist.end(), 0);
+		//edge2vertexDist.clear();
 		edge2vertexDist.resize(2*ne, std::numeric_limits<double>::max());
-		behindMask.clear();
+		std::fill(edge2vertexDist.begin(), edge2vertexDist.end(), std::numeric_limits<double>::max());
+		//behindMask.clear();
 		behindMask.resize(2*ne, false);
+		std::fill(behindMask.begin(), behindMask.end(), false);
+		distance = Eigen::VectorXd::Constant(mesh.get().getNumVerts(), std::numeric_limits<double>::max());
 
 		std::vector<heds::pte> searchMain, searchSub;
+		searchMain.reserve(2 * mesh.get().getNumEdges());
+		searchSub.reserve(2 * mesh.get().getNumEdges());
 		init(src, searchMain);
 
 		double iteration = 0.0;
-		while (!searchMain.empty()) {
+		while (!searchMain.empty() && (iteration <= limit)){
 			iteration += ael;
 			searchSub.clear();
 
@@ -571,6 +628,10 @@ public:
 					edge2vertexDist[trgEdgePrev->id] = dA;
 					edge2vertexDist[trgEdgeNext->id] = dC;
 
+					distance(trgEdge->vert->id) = std::min(distance(trgEdge->vert->id),sigmaT + sqrt(dB));
+					distance(trgEdgePrev->vert->id) = std::min(distance(trgEdgePrev->vert->id),sigmaT + sqrt(dA));
+					distance(trgEdgeNext->vert->id) = std::min(distance(trgEdgeNext->vert->id),sigmaT + sqrt(dC));
+
 					auto& searchNext = dist < iteration ? searchMain : searchSub;
 					searchNext.emplace_back(trgEdgePrev);
 					searchNext.emplace_back(trgEdgeNext);
@@ -580,7 +641,196 @@ public:
 			std::swap(searchMain, searchSub);
 		}
 
-		computeVwiseDist();
+		// computeVwiseDist();
+		return *this;
+	}
+
+	template <typename T = uint32_t>
+	void init2(const std::vector<T>& src, auto& search) {
+		std::vector<bool> arrived(mesh.get().getNumVerts(), false);
+
+		for (auto s : src) {
+			if (arrived[s]) continue;
+			for (const auto& e2 : mesh.get().verts[s]->incidentEdges<heds::Ptr>()) {
+				if (e2->face == nullptr) continue;
+
+				auto& e0 = e2->next;
+				auto& e1 = e0->next;
+
+				Eigen::RowVector3d p0 = mesh.get().pos.row(e0->vert->id);
+				Eigen::RowVector3d p1 = mesh.get().pos.row(e1->vert->id);
+				Eigen::RowVector3d p2 = mesh.get().pos.row(e2->vert->id);
+
+				Eigen::RowVector3d centroid = (p0 + p1 + p2) / 3.0;
+
+				auto h0 = e0->id;
+				auto h1 = e1->id;
+				auto h2 = e2->id;
+				auto d0 = edgeLength[h0/2];
+				auto d1 = edgeLength[h1/2];
+				auto d2 = edgeLength[h2/2];
+
+				edge2vertexDist[h2] = std::min(edge2vertexDist[h2], 0.0);
+				edge2vertexDist[h0] = std::min(edge2vertexDist[h0], util::pow2(d0));
+				edge2vertexDist[h1] = std::min(edge2vertexDist[h1], util::pow2(d2));
+
+				auto f = e0->face->id;
+				face2extraDist[f] = 0.0;
+				face2centerDist[f] = std::min(face2centerDist[f], (centroid - p2).norm());
+				search.emplace(0.0, s);
+			}
+			distance[s] = 0.;
+			arrived[s] = true;
+		}
+	}
+
+
+	template <typename T = uint32_t>
+	VirtualSourceSolver& solve2(const std::vector<T>& src, const uint32_t trg = std::numeric_limits<uint32_t>::max(),
+		const double limit = std::numeric_limits<double>::max(), const bool resetAel = false) {
+		constexpr double THRESHOLD_c = 5.1424;
+		constexpr double THRESHOLD_g = 4.20638;
+		constexpr double THRESHOLD_h = 0.504201;
+		constexpr double THRESHOLD_hg = 2.84918;
+		constexpr double LAMBDA[16] ={
+			0.320991, 0.446887, 0.595879,  0.270094,
+			0.236679, 0.159685,  0.0872932, 0.434132,
+			1.0, 0.726262, 0.0635997, 0.0515979,
+			0.56903, 0.0447586, 0.0612103, 0.718198 };
+
+		if (resetAel) computeAel();
+		int nf = (int)mesh.get().getNumFaces(), ne = (int)mesh.get().getNumEdges();
+		face2centerDist.clear();
+		face2centerDist.resize(nf, std::numeric_limits<double>::max());
+		face2extraDist.clear();
+		face2extraDist.resize(nf, 0.);
+		edge2vertexDist.clear();
+		edge2vertexDist.resize(2*ne, std::numeric_limits<double>::max());
+		behindMask.clear();
+		behindMask.resize(2*ne, false);
+		distance = Eigen::VectorXd::Constant(mesh.get().getNumVerts(), std::numeric_limits<double>::max());
+
+		using node = std::pair<double, uint32_t>;
+		std::priority_queue<node, std::vector<node>, std::greater<node>> search;
+		std::vector<bool> arrived(mesh.get().getNumVerts(), false);
+
+		init2(src, search);
+
+		while(!search.empty()) {
+			auto [ig_, s] = search.top();
+			if (s == trg) break;
+			search.pop();
+
+			for (const auto& srcEdge : mesh.get().verts[s]->incidentEdges<heds::Ptr>()) {
+				auto& trgEdge = srcEdge->pair;
+
+				if (trgEdge->face == nullptr) continue;
+
+				auto& trgEdgeNext = trgEdge->next;
+				auto& trgEdgePrev = trgEdgeNext->next; //(prev)
+
+				auto e1 = edgeLength[trgEdge->uid()];
+				auto e2 = edgeLength[trgEdgePrev->uid()];
+				auto e3 = edgeLength[trgEdgeNext->uid()];
+
+				double& refDist = face2centerDist[trgEdge->face->id];
+
+				bool isBehind = behindMask[srcEdge->id];
+				auto d1 = edge2vertexDist[srcEdge->id];
+				auto d2 = edge2vertexDist[srcEdge->next->next->id]; //(prev)
+				auto sigmaT = face2extraDist[srcEdge->face->id];
+
+				double px = (e1 * e1 + (e2 * e2 - e3 * e3)) / 2.0 / e1;
+				double py = util::zeroBoundSqrt(e2 * e2 - px * px);
+
+				double sx = (e1 * e1 + (d1 - d2)) / 2.0 / e1;
+				double sy = util::zeroBoundSqrt(d1 - sx * sx);
+
+				double ds1 = sqrt(sx * sx + sy * sy);
+				double ds2 = sqrt(util::pow2(sx - e1) + sy * sy);
+
+				double cx = (px + e1) / 3.0;
+				double cy = py / 3.0;
+
+				double dc1 = sqrt(cx * cx + cy * cy);
+				double dc2 = sqrt(util::pow2(cx - e1) + cy * cy);
+
+				double dist;
+				double dA, dB, dC;
+
+				if (isBehind) {
+					if ((dc1 + ds1) < (dc2 + ds2)) {
+						dA = 0.0;
+						dB = e1 * e1;
+						dC = e2 * e2;
+
+						sigmaT += ds1;
+						dist = sigmaT + dc1;
+					} else {
+						dA = e1 * e1;
+						dB = 0.0;
+						dC = e3 * e3;
+
+						sigmaT += ds2;
+						dist = sigmaT + dc2;
+					}
+				} else {
+					double maxe = std::max(e1, std::max(e2, e3));
+					double mine = std::min(e1, std::min(e2, e3));
+					int mask =
+						(maxe > THRESHOLD_c * e1) +	(maxe > THRESHOLD_g * mine) * 2 +
+						(py < THRESHOLD_h* e1) * 4 +	(py < THRESHOLD_hg* maxe) * 8;
+					double qx = px * (1.0 - LAMBDA[mask]) + cx * LAMBDA[mask];
+					double qy = py * (1.0 - LAMBDA[mask]) + cy * LAMBDA[mask];
+
+					double ttx = qx * sy + sx * qy;
+
+					if (ttx < 0) {
+						dA = 0.0;
+						dB = e1 * e1;
+						dC = e2 * e2;
+
+						sigmaT += ds1;
+						dist = sigmaT + dc1;
+					} else if (ttx > e1 * (qy + sy)) {
+						dA = e1 * e1;
+						dB = 0.0;
+						dC = e3 * e3;
+
+						sigmaT += ds2;
+						dist = sigmaT + dc2;
+					} else {
+						ttx = px * sy + sx * py;
+						dA = d1;
+						dB = d2;
+						dC = util::pow2(px - sx) + util::pow2(py + sy);
+
+						dist = sigmaT + sqrt(util::pow2(cx - sx) + util::pow2(cy + sy));
+
+						behindMask[trgEdgePrev->id] = (ttx < 0);
+						behindMask[trgEdgeNext->id] = (ttx > e1 * (py + sy));
+					}
+				}
+
+				if (dist < refDist) {
+					refDist = dist;
+
+					face2extraDist[trgEdge->face->id] = sigmaT;
+					edge2vertexDist[trgEdge->id] = dB;
+					edge2vertexDist[trgEdgePrev->id] = dA;
+					edge2vertexDist[trgEdgeNext->id] = dC;
+
+					distance(trgEdge->vert->id) = std::min(distance(trgEdge->vert->id), sigmaT + sqrt(dB));
+					distance(trgEdgePrev->vert->id) = std::min(distance(trgEdgePrev->vert->id), sigmaT + sqrt(dA));
+					distance(trgEdgeNext->vert->id) = std::min(distance(trgEdgeNext->vert->id), sigmaT + sqrt(dC));
+
+					search.emplace(sigmaT + sqrt(dB), trgEdge->vert->id);
+					search.emplace(sigmaT + sqrt(dA), trgEdgePrev->vert->id);
+					search.emplace(sigmaT + sqrt(dC), trgEdgeNext->vert->id);
+				}
+			}
+		}
+
 		return *this;
 	}
 
@@ -595,21 +845,21 @@ public:
 };
 
 class GeodesicHeatSolver {
-	std::reference_wrapper<heds::SurfaceMesh> mesh;
-	std::reference_wrapper<diff::DiscreteLaplacian> dsl;
+	std::reference_wrapper<const heds::SurfaceMesh> mesh;
+	std::reference_wrapper<const diff::DiscreteLaplacian> dsl;
 	Eigen::VectorXd distance;
 	Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> heat, poisson;
 
 public:
 
 	/// @param lambda : time step
-	GeodesicHeatSolver(heds::SurfaceMesh& mesh, diff::DiscreteLaplacian& dsl, double lambda = 0) : mesh(mesh), dsl(dsl) {
-		if (lambda == 0) lambda = util::pow2(mesh.avgEdgeLength());
+	GeodesicHeatSolver(const heds::SurfaceMesh& mesh, const diff::DiscreteLaplacian& dsl, double lambda = 0) : mesh(mesh), dsl(dsl) {
+		if (lambda == 0) lambda = util::pow2(mesh.maxDiagLength());
 
-		if (dsl.lbo.rows() == 0) dsl.laplacianOp();
-		if (dsl.s0.rows() == 0) dsl.vertexAreas();
-		if (dsl.grad[0].rows() == 0) dsl.gradientOp();
-		if (dsl.div[0].rows() == 0) dsl.divergenceOp();
+		dsl.laplacianOp();
+		dsl.vertexAreas();
+		dsl.gradientOp();
+		dsl.divergenceOp();
 
 		heat.compute(eig::spdiag(dsl.s0) + lambda * dsl.lbo);
 		poisson.compute(-dsl.lbo);
@@ -642,49 +892,104 @@ public:
 	}
 };
 
-inline void test() {
-	//uint32_t target = 10000;
-	//target = (target >= mesh.getNumVerts()) ? (uint32_t)mesh.getNumVerts() - 1 : target;
-	//{
-	//	kika::util::Timer timer;
-	//	auto dist = kika::gd::DijkstraSolver(mesh).solve({ 0 }).dist();
-	//	std::cout << dist[target] << std::endl;
-	//}
-	//
-	//{
-	//  kika::util::Timer timer;
-	//  auto dist = kika::gd::FastMarchingSolver(mesh).solve({ 0 }).dist();
-	//  std::cout << dist[target] << std::endl;
-	//}
-	//
-	//{
-	//  kika::util::Timer timer;
-	//  auto dist = kika::gd::VirtualSourceSolver(mesh).solve({ 0 }).dist();
-	//  std::cout << dist[target] << std::endl;
-	//}
-	//{
-	//	kika::util::Timer timer;
-	//	auto dist = kika::gd::DijkstraSolver(mesh).solve({ 0 }, target).dist();
-	//	std::cout << dist[target] << std::endl;
-	//}
-	//
-	//{
-	//	kika::util::Timer timer;
-	//	auto dist = kika::gd::FastMarchingSolver(mesh).solve({ 0 }).dist();
-	//	std::cout << dist[target] << std::endl;
-	//}
-	//
-	//{
-	//	kika::util::Timer timer;
-	//	auto dist = kika::gd::FastMarchingSolver(mesh).solve({ 0 }, target).dist();
-	//	std::cout << dist[target] << std::endl;
-	//}
-	//
-	//{
-	//	kika::util::Timer timer;
-	//	auto dist = kika::gd::VirtualSourceSolver(mesh).solve({ 0 }).dist();
-	//	std::cout << dist[target] << std::endl;
-	//}
-}
+// template <bool CompareExact = false>
+// inline void test(kika::heds::SurfaceMesh& mesh, uint32_t target = 10000) {
+// 	target = (target >= mesh.getNumVerts()) ? (uint32_t)mesh.getNumVerts() - 1 : target;
+// 	
+// 	kika::util::Timer timer;
+// 	timer.str = "Dijkstra : ";
+// 	auto di = kika::gd::DijkstraSolver(mesh).solve({ 0 }).dist();
+// 	std::cout << "target : " << di[target] << std::endl;
+// 	timer.end();
+// 	
+// 	timer.restart();
+// 	timer.str = "Dijkstra(fast) : ";
+// 	auto fast = kika::gd::exp::DijkstraSolver(mesh).solve({ 0 }).dist();
+// 	std::cout << "target : " << fast[target] << std::endl;
+// 	timer.end();
+// 	
+// 	timer.restart();
+// 	timer.str = "FastMarching : ";
+// 	auto fm = kika::gd::FastMarchingSolver(mesh).solve({ 0 }).dist();
+// 	std::cout << "target : " << fm[target] << std::endl;
+// 	timer.end();
+// 	
+// 	timer.restart();
+// 	timer.str = "VirtualSource : ";
+// 	auto vs = kika::gd::VirtualSourceSolver(mesh).solve({ 0 }).dist();
+// 	std::cout << "target : " << vs[target] << std::endl;
+// 	timer.end();
+// 	
+// 	
+// 	timer.restart();
+// 	timer.str = "Astar : ";
+// 	auto as = kika::gd::DijkstraSolver(mesh).solve({ 0 }, target).dist();
+// 	std::cout << "target : " << as[target] << std::endl;
+// 	timer.end();
+// 	
+// 	timer.restart();
+// 	timer.str = "FastMarching(target) : ";
+// 	auto fmt = kika::gd::FastMarchingSolver(mesh).solve({ 0 }, target).dist();
+// 	std::cout << "target : " << fmt[target] << std::endl;
+// 	timer.end();
+// 	
+// 	timer.restart();
+// 	timer.str = "VirtualSource(target) : ";
+// 	auto vst = kika::gd::VirtualSourceSolver(mesh).solve({ 0, target }).dist();
+// 	std::cout << "target : " << vst[target] << std::endl;
+// 	timer.end();
+// 	
+// 	if constexpr (CompareExact) {
+// 		kika::diff::DiscreteLaplacian dsl(mesh);
+// 		timer.restart();
+// 		timer.str = "GeodesicHeat : ";
+// 		auto gh = kika::gd::GeodesicHeatSolver(mesh, dsl).solve({ 0 }).dist();
+// 		std::cout << "target : " << gh[target] << std::endl;
+// 		timer.end();
+// 	
+// 	
+// 		Eigen::VectorXd d;
+// 	
+// 		timer.restart();
+// 		timer.str = "Exact : ";
+// 		Eigen::VectorXi VS(1), FS, VT, FT;
+// 		VS << 0;
+// 		VT.setLinSpaced(mesh.getNumVerts(), 0, mesh.getNumVerts() - 1);
+// 		igl::exact_geodesic(mesh.pos, kika::eig::vec2eig<3>(mesh.faceList()), VS, FS, VT, FT, d);
+// 		std::cout << "target : " << d[target] << std::endl;
+// 		timer.end();
+// 	
+// 		std::cout << "Error : (Exact -    Dijkstra  )^2 : " << (d - di).squaredNorm() << std::endl;
+// 		std::cout << "Error : (Exact - FastMarching )^2 : " << (d - fm).squaredNorm() << std::endl;
+// 		std::cout << "Error : (Exact - VirtualSource)^2 : " << (d - vs).squaredNorm() << std::endl;
+// 		std::cout << "Error : (Exact - GeodesicHeat )^2 : " << (d - gh).squaredNorm() << std::endl;
+// 	}
+// }
 
+//// coloring
+// 
+// auto gd = kika::gd::GeodesicHeatSolver(mesh, ppl, mesh.maxDiagLength()).solve({ 0 }).dist();
+// Eigen::MatrixX2d uvs = Eigen::MatrixX2d::Zero(mesh.getNumVerts(), 2);
+// uvs.col(0) = gd.array() / gd.maxCoeff();
+// 
+// auto grad = kika::tex::Gradation(kika::color::palette::plasma()).create();
+// grad.gammaCorrection();
+// grad.upsideDown();
+// auto check = kika::tex::Checker(
+// 	kika::color::fRGBA(1.0, 1.0, 1.0),
+// 	kika::color::fRGBA(0.0, 0.0, 0.0),
+// 	kika::color::fRGBA(0.0, 0.0, 0.0),
+// 	kika::color::fRGBA(0.0, 0.0, 0.0)
+// ).create(512, 128);
+// auto tex = grad;// .mix(check, 0.5);
+// 
+// for (size_t i = 0; i < tex.reso * tex.reso; i++) {
+// 	if (check.img[i].all()) {
+// 		tex.img[i] = kika::color::fRGBA(check.img[i]).mix(grad.img[i], 0.5);
+// 	} else {
+// 		tex.img[i] = kika::color::fRGBA(grad.img[i]);
+// 	}
+// }
+// 
+//
 }

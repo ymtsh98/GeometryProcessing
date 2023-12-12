@@ -43,11 +43,11 @@ public:
 		std::vector<std::vector<T>>& indices, std::vector<std::vector<float>>& dists) {
 		size_t n = (size_t)pts.rows();
 		Eigen::Matrix<float, Rows, Cols, Eigen::RowMajor> tmp(pts.cast<float>());
-		std::vector<faiss::Index::idx_t> indices_(k * n);
+		std::vector<faiss::idx_t> indices_(k * n);
 		std::vector<float> dists_(k * n);
 
-		if constexpr (TRAIN) index.search((faiss::Index::idx_t)n, tmp.data(), k, dists_.data(), indices_.data());
-		else quantizer.search((faiss::Index::idx_t)n, tmp.data(), k, dists_.data(), indices_.data());
+		if constexpr (TRAIN) index.search((faiss::idx_t)n, tmp.data(), k, dists_.data(), indices_.data());
+		else quantizer.search((faiss::idx_t)n, tmp.data(), k, dists_.data(), indices_.data());
 
 		indices.resize(n, std::vector<T>(k));
 		dists.resize(n, std::vector<float>(k));
@@ -91,7 +91,7 @@ public:
 	}
 
 	template <typename Derived, int Rows = Derived::RowsAtCompileTime, int Cols = Derived::ColsAtCompileTime>
-	void getNearestNeighbors(const Eigen::DenseBase<Derived>& pts, std::vector<faiss::Index::idx_t>& indices, std::vector<float>& dists) {
+	void getNearestNeighbors(const Eigen::DenseBase<Derived>& pts, std::vector<faiss::idx_t>& indices, std::vector<float>& dists) {
 		auto n = pts.rows();
 		Eigen::Matrix<float, Rows, Cols, Eigen::RowMajor> tmp(pts.cast<float>());
 		indices.resize(n);
@@ -101,20 +101,20 @@ public:
 		else quantizer.search(n, tmp.data(), 1, dists.data(), indices.data());
 	}
 
-	template <typename T = faiss::Index::idx_t, typename Derived>
+	template <typename T = faiss::idx_t, typename Derived>
 	std::vector<T> getNearestNeighbors(const Eigen::DenseBase<Derived>& pts) {
-		std::vector<faiss::Index::idx_t> indices;
+		std::vector<faiss::idx_t> indices;
 		std::vector<float> dists;
 
 		getNearestNeighbors(pts, indices, dists);
 
-		if constexpr (std::is_same_v<T, faiss::Index::idx_t>)
+		if constexpr (std::is_same_v<T, faiss::idx_t>)
 			return indices;
 		else
 			return util::vecast<T>(indices);
 	}
 
-	template <typename T = faiss::Index::idx_t, typename Derived1, typename Derived2>
+	template <typename T = faiss::idx_t, typename Derived1, typename Derived2>
 	static std::vector<T> nearestNeighbors(
 		const Eigen::DenseBase<Derived1>& src,
 		const Eigen::DenseBase<Derived2>& trg,

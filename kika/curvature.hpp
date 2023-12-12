@@ -5,10 +5,10 @@
 
 namespace kika::curv {
 
-inline Eigen::VectorXd meanCurvature(const heds::SurfaceMesh& mesh, const diff::DiscreteLaplacian& dsl, const Eigen::MatrixX3d& normals) {
-  Eigen::MatrixX3d Lp = (0.5 * dsl.s0.cwiseInverse()).asDiagonal() * (dsl.lbo * mesh.pos);
-  return (Lp.array() * normals.array()).rowwise().sum();
-  // return (Lp.array() * normals.array()).rowwise().sum().cwiseSign().array() * (Lp.rowwise().norm()).array(); // (if normals is non-unit vectors)
+inline Eigen::VectorXd meanCurvature(const heds::SurfaceMesh& mesh, const diff::DiscreteLaplacian& dsl, const Eigen::MatrixX3d& vnormals) {
+  Eigen::MatrixX3d Lp = (0.5 * dsl.vertexAreas().cwiseInverse()).asDiagonal() * (dsl.laplacianOp() * mesh.pos);
+  return (Lp.array() * vnormals.array()).rowwise().sum();
+  // return (Lp.array() * vnormals.array()).rowwise().sum().cwiseSign().array() * (Lp.rowwise().norm()).array(); // (if vnormals is non-unit vectors)
 }
 
 inline Eigen::VectorXd gaussianCurvature(const heds::SurfaceMesh& mesh, const diff::DiscreteLaplacian& dsl) {
@@ -24,7 +24,22 @@ inline Eigen::VectorXd gaussianCurvature(const heds::SurfaceMesh& mesh, const di
     } while (e0 != face->edge);
   }
 
-	return curvature.array() / dsl.s0.array();
+	return curvature.array() / dsl.vertexAreas().array();
+}
+
+// @return facewise total curvature
+inline Eigen::VectorXd totalCurvature(const heds::SurfaceMesh& mesh, const diff::PixarPolyLaplacian& dsl, const Eigen::MatrixX3d& vnormals) {
+  int n = (int)mesh.getNumFaces();
+  Eigen::VectorXd curvature(n);
+
+  dsl.laplacianOp();
+  #pragma omp parallel for
+  for (int i = 0; i < n; i++) {
+    Eigen::Matrix3Xd N = vnormals(mesh.faces[i]->circuitVerts(), Eigen::all).transpose();
+    curvature[i] = (N * dsl.weakLbo[i] * N.transpose()).trace();
+  }
+
+  return curvature;
 }
 
 }

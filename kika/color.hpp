@@ -1,9 +1,11 @@
 #pragma once
-
 #include <array>
+#include <algorithm>
+#include <cassert>
 #include <functional>
 #include <iostream>
 #include <string>
+#include <numeric>
 
 namespace kika::color {
 
@@ -560,7 +562,6 @@ inline ColorRamp blueRed() {
 
 inline ColorRamp whiteBlack() {
 	return ColorRamp{ { 0xffffffffu, 0x000000ffu } };
-	// return ColorRamp{ { 0x1012eeffu, 0xf3efe0ffu, 0xee1210ffu} };
 }
 
 /// -------------------- https://www.kennethmoreland.com/color-advice/  --------------------
@@ -607,12 +608,12 @@ inline ColorRamp inferno() {
 // -------------------- utility --------------------
 
 template <typename T>
-std::vector<std::array<double, 3>> scalar2color(const T& values, const ColorRamp& plt = palette::blueRed()) {
-	auto copy = values;
+std::vector<std::array<double, 3>> normalizedColor(const T& values, const ColorRamp& plt = palette::blueRed()) {
+	T copy = values;
 	double min = *std::min_element(copy.begin(), copy.end());
-	for (auto v : copy) v -= min;
+	for (auto& v : copy) v -= min;
 	double max = *std::max_element(copy.begin(), copy.end());
-	for (auto v : copy) v /= max;
+	for (auto& v : copy) v /= max;
 	std::vector<std::array<double, 3>> colors(copy.size());
 	for (size_t i = 0; i < colors.size(); i++) {
 		fRGBA rgba = plt(copy[i]);
@@ -623,10 +624,29 @@ std::vector<std::array<double, 3>> scalar2color(const T& values, const ColorRamp
 	return colors;
 }
 
-inline std::vector<std::array<double, 3>> gradation(const size_t n, const ColorRamp& plt = palette::blueRed()) {
+template <typename T>
+std::vector<std::array<double, 3>> stepColor(const T& values, const ColorRamp& plt = palette::blueRed(), const bool gammaCorrection = true) {
+	size_t n = (size_t)values.size();
+	std::vector<uint32_t> iota(n);
+	std::iota(iota.begin(), iota.end(), 0);
+	std::sort(iota.begin(), iota.end(), [&values](auto l, auto r) { return values[l] < values[r]; });
+
 	std::vector<std::array<double, 3>> colors(n);
 	for (size_t i = 0; i < colors.size(); i++) {
 		fRGBA rgba = plt((double)i / (n - 1));
+		if (gammaCorrection) rgba = rgba.gammaCorrection();
+		colors[iota[i]][0] = rgba.r();
+		colors[iota[i]][1] = rgba.g();
+		colors[iota[i]][2] = rgba.b();
+	}
+	return colors;
+}
+
+inline std::vector<std::array<double, 3>> indexColor(const size_t n, const ColorRamp& plt = palette::blueRed(), const bool gammaCorrection = true) {
+	std::vector<std::array<double, 3>> colors(n);
+	for (size_t i = 0; i < colors.size(); i++) {
+		fRGBA rgba = plt((double)i / (n - 1));
+		if (gammaCorrection) rgba = rgba.gammaCorrection();
 		colors[i][0] = rgba.r();
 		colors[i][1] = rgba.g();
 		colors[i][2] = rgba.b();

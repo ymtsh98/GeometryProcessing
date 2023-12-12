@@ -72,6 +72,12 @@ inline double cross2(const Eigen::Vector2d& u, const Eigen::Vector2d& v) {
 /// 
 namespace kika::eig {
 
+/// generate (dense < n=50 or sparse) matrix like, 
+///     | 1 1 0 ... 0 0 |
+///     | 0 1 1 ... 0 0 |
+/// M = |       ...     |
+///     | 0 0 0 ... 1 1 |
+///     | 1 0 0 ... 0 1 |
 template <typename T = double, typename I = size_t>
 Eigen::SparseMatrix<T> circuitMat(const I n, const double self = -1.0, const double next = 1.0) {
 	if (n < 50) {
@@ -134,7 +140,7 @@ Eigen::Matrix3<T> skewSymMat(const Eigen::Vector3<T>& v) {
 	return mat;
 }
 
-template <typename Matrix, typename Scalar = Matrix::Scalar, typename T1 = Scalar, typename T2 = Scalar>
+template <typename Matrix, typename Scalar = typename Matrix::Scalar, typename T1 = Scalar, typename T2 = Scalar>
 Matrix randomMat(
 	const int rows, const int cols,
 	const T1& lower, const T2& higher, const unsigned int seed = std::random_device{}()) {
@@ -229,12 +235,64 @@ Eigen::SparseMatrix<T> sprandsym(const size_t rows, const size_t cols, double de
 }
 
 // vector as diagonal sparse matrix.
-template <typename T = double>
-Eigen::SparseMatrix<T> spdiag(const Eigen::VectorX<T>& diag) {
+template <typename Derived, typename T = typename Derived::Scalar>
+Eigen::SparseMatrix<T> spdiag(const Eigen::DenseBase<Derived>& diag) {
 	Eigen::SparseMatrix<T> mat(diag.rows(), diag.rows());
-	mat.setIdentity();
-	mat.diagonal().array() *= diag.array();
+
+	std::vector<Eigen::Triplet<double>> tripls;
+	tripls.reserve(diag.rows());
+	for (int i = 0; i < (int)diag.rows(); i++) tripls.emplace_back((int)i, (int)i, diag[i]);
+
+	mat.setFromTriplets(tripls.begin(), tripls.end());
 	return mat;
+
+	//// old impl
+	// mat.setIdentity();
+	// mat.diagonal().array() *= diag.array();
+}
+
+// extruct sub-matrix from mat by idx (row and column)
+template <typename T = int>
+Eigen::SparseMatrix<double> spsub(const Eigen::SparseMatrix<double>& mat, const std::vector<T>& idx) {
+	Eigen::SparseMatrix<double> ext(mat.rows(), idx.size());
+	std::vector<Eigen::Triplet<double>> tripls;
+	tripls.reserve(idx.size());
+	for (size_t i = 0; i < idx.size(); i++) tripls.emplace_back((int)idx[i], (int)i, 1.0);
+	ext.setFromTriplets(tripls.begin(), tripls.end());
+
+	return ext.transpose() * mat * ext;
+}
+
+// extruct sub-matrix from mat by idx (complement of row and column)
+template <typename T = int>
+Eigen::SparseMatrix<double> spcosub(const Eigen::SparseMatrix<double>& mat, const std::vector<T>& idx) {
+	Eigen::VectorXd eye = Eigen::VectorXd::Ones(mat.rows());
+	for (auto i : idx) eye[i] = 0.;
+
+	auto ext = kika::eig::spdiag(eye);
+	return ext.transpose() * mat * ext;
+}
+
+// set fixed value at sparse matrix(row, col) (remove all other values at selected row and col)
+// @param ref : prune under ref value
+void spfix(Eigen::SparseMatrix<double>& mat, const size_t row, const size_t col, const double value, const double ref = 1e-8) {
+	mat.col(col) /= std::numeric_limits<double>::infinity();
+	mat.row(row) /= std::numeric_limits<double>::infinity();
+	mat.coeffRef(row, col) = value;
+	mat.prune(ref);
+}
+
+// set fixed value at sparse matrix(row, col) (remove all other values at selected row and col)
+// @param ref : prune under ref value
+// @param rcs : rows and cols
+template <typename T = int>
+void spfix(Eigen::SparseMatrix<double>& mat, const std::vector<T> rcs, const double value, const double ref = 1e-8) {
+	for (auto i : rcs) {
+		mat.col(i) /= std::numeric_limits<double>::infinity();
+		mat.row(i) /= std::numeric_limits<double>::infinity();
+		mat.coeffRef(i, i) = value;
+	}
+	mat.prune(ref);
 }
 
 // (rowwise or colwise) max for sparse matrix
@@ -285,6 +343,14 @@ inline Ret spArgMax(const Eigen::SparseMatrix<T>& mat, const bool rowwise = true
 	return index;
 }
 
+// (rowwise or colwise) normalize by sum
+template <typename T = double>
+inline Eigen::SparseMatrix<T> sumNormalized(const Eigen::SparseMatrix<T>& mat, const bool rowwise = true) {
+	if (rowwise)
+		return (mat * Eigen::VectorXd::Ones(mat.cols())).cwiseInverse().asDiagonal() * mat;
+	else
+		return mat * (Eigen::RowVectorXd::Ones(mat.rows()) * mat).cwiseInverse().asDiagonal();
+}
 
 /// @param offset : start index offset
 /// @return rows, cols, vals
@@ -435,7 +501,7 @@ void print(const Eigen::SparseCompressedBase<Derived>& A, const int row = -1, co
 namespace kika::eig {
 
 // normalize 0 - 1 range
-template <typename Derived, typename Scalar = Derived::Scalar, 
+template <typename Derived, typename Scalar = typename Derived::Scalar,
 	int Rows = Derived::RowsAtCompileTime, int Cols = Derived::ColsAtCompileTime>
 inline Eigen::Matrix<Scalar, Rows, Cols> zero2oneNorm(const Eigen::DenseBase<Derived>& vector) {
 	Eigen::Matrix<Scalar, Rows, Cols> ret = vector;
@@ -562,7 +628,7 @@ void vAppendDenseMat(Eigen::PlainObjectBase<Derived>& A, const Args&... args) {
 }
 
 // convert real X2 mat to complex vector
-template <typename Derived, typename Scalar = Derived::Scalar, int Rows=Derived::RowsAtCompileTime>
+template <typename Derived, typename Scalar = typename Derived::Scalar, int Rows=Derived::RowsAtCompileTime>
 Eigen::Vector<std::complex<Scalar>, Rows> cmplxCast(const Eigen::MatrixBase<Derived>& mat) {
 	Eigen::Vector<std::complex<Scalar>, Rows> vec(mat.rows());
 	for (Eigen::Index i = 0; i < vec.rows(); i++) {
@@ -572,7 +638,7 @@ Eigen::Vector<std::complex<Scalar>, Rows> cmplxCast(const Eigen::MatrixBase<Deri
 }
 
 // convert complex vector to real X2 mat
-template <typename Derived, typename Scalar = Derived::Scalar::value_type, int Rows=Derived::RowsAtCompileTime>
+template <typename Derived, typename Scalar = typename Derived::Scalar::value_type, int Rows=Derived::RowsAtCompileTime>
 Eigen::Matrix<Scalar, Rows, 2> realCast(const Eigen::MatrixBase<Derived>& vec) {
 	Eigen::Matrix<Scalar, Rows, 2> mat(vec.rows(), 2);
 	for (Eigen::Index i = 0; i < mat.rows(); i++) {
@@ -588,11 +654,11 @@ Eigen::Matrix<Scalar, Rows, 2> realCast(const Eigen::MatrixBase<Derived>& vec) {
 /// 
 namespace kika::eig {
 
-// this is same operator (circutMat * mat) / (mat * circuitMat)
+// this is same operator (circutMat * mat) or (mat * circuitMat)
 // usage : 
-// circuitMat(n, -1, 1)   :(CircuitOperator - mat) / (mat - CircuitOperator)
-// circuitMat(n, 1, 1)    :(CircuitOperator + mat) / (mat + CircuitOperator)
-// circuitMat(n, -1, 1).transpose() :(CircuitOperator * mat) / (mat * CircuitOperator)
+// circuitMat(n, -1, 1)   :(CircuitOperator - mat) or (mat - CircuitOperator)
+// circuitMat(n, 1, 1)    :(CircuitOperator + mat) or (mat + CircuitOperator)
+// circuitMat(n, -1, 1).transpose() :(CircuitOperator * mat) or (mat * CircuitOperator)
 class CircuitOperator {
 	std::vector<size_t> forward, backward;
 
@@ -657,4 +723,64 @@ public:
 	}
 };
 
+}
+
+namespace kika::eig {
+inline void showMatrix(const Eigen::MatrixXd& mat) {
+	auto gen = std::mt19937{ std::random_device{}() };
+	auto tenDigitDist = std::uniform_int_distribution<uint64_t>(1'000'000'000ull, 9'999'999'999ull);
+
+	std::string matFname = "show_matrix_" + std::to_string(tenDigitDist(gen)) + ".temp";
+	std::string pyFname = "show_matrix_" + std::to_string(tenDigitDist(gen)) + ".py";
+	std::ofstream temp(matFname);
+	for (Eigen::Index i = 0; i < mat.rows(); i++) {
+		for (Eigen::Index t = 0; t < mat.cols() - 1; t++) {
+			temp << mat(i, t) << " ";
+		}
+		temp << mat(i, mat.cols() - 1) << "\n";
+	}
+	temp.close();
+
+	temp.open(pyFname);
+	const char pycode[] =
+		"# -*-coding: utf-8 -*-\n"
+		"import sys\n"
+		"import numpy as np\n"
+		"import matplotlib.pyplot as plt\n"
+		"from mpl_toolkits.axes_grid1 import make_axes_locatable\n"
+		"def close_event() :\n"
+		"  plt.close()\n"
+		"if __name__ == '__main__':\n"
+		"  fig = plt.figure()\n"
+		"  file = open(sys.argv[1], 'r')\n"
+		"  mat =[]\n"
+		"  k1 = int(sys.argv[2])\n"
+		"  k2 = int(sys.argv[3])\n"
+		"  for _ in range(k1) :\n"
+		"    line = list(map(float, file.readline().split(' ')))\n"
+		"    if (not line) : break\n"
+		"    mat.append(line)\n"
+		"  np_mat = np.array(mat)\n"
+		"  x = range(k2)\n"
+		"  y = range(k1)\n"
+		"  X, Y = np.meshgrid(x, y)\n"
+		"  plt.pcolormesh(X, Y, np_mat, shading='auto')\n"
+		"  plt.axis('image')\n"
+		"  plt.colorbar()\n"
+		"  fig, ax = plt.subplots()\n"
+		"  image = ax.pcolormesh(X, Y, np_mat, shading='auto')\n"
+		"  ax.axis('image')\n"
+		"  divider = make_axes_locatable(ax)\n"
+		"  ax_cb = divider.new_horizontal(size='2%', pad=0.05)\n"
+		"  fig.add_axes(ax_cb)\n"
+		"  plt.close()\n"
+		"  plt.colorbar(image, cax=ax_cb)\n"
+		"  plt.show()\n";
+	temp << pycode;
+	temp.close();
+
+	system(("python " + pyFname + " " + matFname + " " + std::to_string(mat.rows()) + " " + std::to_string(mat.cols())).c_str());
+	std::filesystem::remove(matFname);
+	std::filesystem::remove(pyFname);
+}
 }

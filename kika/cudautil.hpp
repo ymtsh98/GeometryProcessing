@@ -1,3 +1,38 @@
+//// <<< grid, block >>>
+//// num of target computation N -> grid * block = N
+////
+//// Maximum number of threads per block : 1024
+//// Maximum sizes of each dimension of a block : 1024 x 1024 x 64 (X x Y x Z <= 1024, (33 x 32 x 1 is not legal))
+//// Maximum sizes of each dimension of a grid : 2147483647 x 65535 x 65535
+////
+//// gridDim -> blockDim -> blockIdx -> threadIdx
+////  const  ->   const  -> [0,grid] -> [0,block]
+////-----------------------------------------------------
+//// 1-dim :
+//// uint32_t i = blockIdx.x * blockDim.x + threadIdx.x
+//// 
+//// for i:
+//// for i (blockIdx) in range(gridDim = numBlock)
+////    for j (threadIdx) in range(r = blockDim(numThread))
+////
+////-----------------------------------------------------
+//// 2-dim :
+//// uint32_t ix = blockIdx.x * blockDim.x + threadIdx.x;
+//// uint32_t iy = blockIdx.y * blockDim.y + threadIdx.y;
+//// uint32_t i = ix * (gridDim.y * blockDim.y) + iy;
+//// 
+//// for ix:
+////   for iy:
+////
+////-----------------------------------------------------
+//// 3-dim :
+//// uint32_t ix = blockIdx.x * blockDim.x + threadIdx.x;
+//// uint32_t iy = blockIdx.y * blockDim.y + threadIdx.y;
+//// uint32_t iz = blockIdx.z * blockDim.z + threadIdx.z;
+//// uint32_t i = ix * (gridDim.y * blockDim.y) * (gridDim.z * blockDim.z) + iy * (gridDim.z * blockDim.z) + iz;
+//// 
+//// for ix: for iy: for iz:
+
 #pragma once
 #include <cublas_v2.h>
 #include <cusolverDn.h>
@@ -20,6 +55,7 @@ public:
 
 	CuData() : host(nullptr), device(nullptr), size(0) {}
 
+	// @param size : size of allocation (byte)
 	CuData(const size_t size) : CuData() {
 		alloc(size);
 	}
@@ -32,6 +68,7 @@ public:
 		host = nullptr;
 	}
 
+	// @param size : size of allocation (byte)
 	void alloc(const size_t size) {
 		this->size = size;
 		if constexpr (Pinned) {
@@ -70,6 +107,12 @@ public:
 	void device2hostAsync(cudaStream_t& stream) {
 		cudaMemcpyAsync(host, device, size, cudaMemcpyDeviceToHost, stream);
 	}
+
+	template <typename V>
+	void set(const V* value) {
+		cudaMemcpy(host, value, size, cudaMemcpyHostToHost);
+		host2device();
+	}
 };
 
 template <typename T, bool Pinned = true>
@@ -89,6 +132,7 @@ public:
 		device = nullptr;
 	}
 
+	// @param size : size of allocation (byte)
 	void alloc(const size_t width, const size_t height) {
 		hp = width;
 		this->width = width;

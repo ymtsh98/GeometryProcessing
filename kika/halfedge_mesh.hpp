@@ -2,6 +2,7 @@
 #include <vector>
 #include <queue>
 #include <unordered_set>
+#include <unordered_map>
 #include <kika/az_memory_pool.hpp>
 
 /// type definition
@@ -173,14 +174,13 @@ public:
 	bool isRemovable() const;
 };
 
-
 }
 
 /// impl elements
 namespace kika::heds {
 
 namespace impl {
-template <ReturnType Type, typename V, typename E = V::value_type>
+template <ReturnType Type, typename V, typename E = typename V::value_type>
 inline constexpr void appendIdxOrPtr(V& v, E& e) {
 	if constexpr(Type == heds::Idx) v.emplace_back(e->id);
 	else v.emplace_back(e);
@@ -262,7 +262,7 @@ inline bool Vertex::isUnrefer() const {
 	return edge == nullptr || edge->face == nullptr;
 }
 
-// (check onering face is removable.)
+// check onering face is removable (if removed, mesh will be non-manifold).
 inline bool Vertex::isRemovable() const {
 	for (auto& e : incidentEdges<Ptr>()) {
 		if (!e->isBoundary() && e->pair->vert->isBoundary() &&
@@ -290,7 +290,7 @@ inline bool Halfedge::isSecond() const {
 	return id % 2;
 }
 
-// get adjacent faces (left, right)
+// get adjacent faces (left, right) (boundary -> nullptr or 2^32 - 1)
 template <ReturnType Type, typename Ret>
 Ret Halfedge::adjacentFaces() const {
 	if constexpr (Type == Idx) 
@@ -321,13 +321,7 @@ inline bool Halfedge::isRemovable() const {
 	auto rf = pair->face;
 	if (rf == nullptr) return true;
 
-	auto l = this->face->circuitVerts();
-	std::sort(l.begin(), l.end());
-	auto r = rf->circuitVerts();
-	std::sort(r.begin(), r.end());
-	kika::util::pushBackCounter<uint32_t> pbc;
-	std::set_intersection(l.begin(), l.end(), r.begin(), r.end(), std::back_inserter(pbc));
-	return pbc.count <= 2;
+	return util::numVecIntersect(this->face->circuitVerts(), rf->circuitVerts()) <= 2;
 }
 
 #if false
@@ -380,17 +374,14 @@ inline bool Halfedge::isContractible() const {
 
 template <bool InnerTest, bool OuterTest>
 bool Halfedge::isK4() const {
-	auto&& ov = vert->oneringNeighbs(), ou = pair->vert->oneringNeighbs();
+	auto&& ov = vert->oneringNeighbs();
+	auto&& ou = pair->vert->oneringNeighbs();
 	if constexpr (InnerTest) {
 		if (ov.size() == 3 || ou.size() == 3) return true;
 	} 
 	if constexpr (OuterTest) {
 		// check each end point shares over 2 vertices.
-		std::sort(ov.begin(), ov.end());
-		std::sort(ou.begin(), ou.end());
-		kika::util::pushBackCounter<uint32_t> pbc;
-		std::set_intersection(ov.begin(), ov.end(), ou.begin(), ou.end(), std::back_inserter(pbc));
-		return pbc.count > 2;
+		return util::numVecIntersect(std::move(ov), std::move(ou)) > 2;
 	}
 	return false;
 }
@@ -543,12 +534,15 @@ public:
 	ptEdges edges;
 	ptFaces faces;
 
-private:
+protected:
+	// mutable std::unordered_map<std::string, void*> cache;
+
 	template <typename T>
 	auto make(const uint32_t i) {
 		return new(mpool.bind<T>()) T(i);
 	}
 
+private:
 	template <typename T>
 	inline size_t faceInputSize(const T& data) const {
 		if constexpr (util::IsEigen<T>) return static_cast<size_t>(data.rows());
@@ -557,9 +551,24 @@ private:
 	}
 
 	template <typename T>
+	inline void appendKey(std::vector<EdgeKey>& feKey, uint32_t i, const T& faceAttrib) {
+		if KIKA_CONSTEXPR(util::IsEigen<T>) {
+			for (size_t j = 0, k = (size_t)faceAttrib.cols(); j < k; j++)
+				feKey.emplace_back(faceAttrib(i, j), faceAttrib(i, (j+1)%k));
+		} else if KIKA_CONSTEXPR(util::IsStdvec2d<T>) {
+			for (size_t j = 0, k = faceAttrib[i].size(); j < k; j++)
+				feKey.emplace_back(faceAttrib[i][j], faceAttrib[i][(j+1)%k]);
+		} else {
+			feKey.emplace_back(faceAttrib[i * 3 + 0], faceAttrib[i * 3 + 1]);
+			feKey.emplace_back(faceAttrib[i * 3 + 1], faceAttrib[i * 3 + 2]);
+			feKey.emplace_back(faceAttrib[i * 3 + 2], faceAttrib[i * 3 + 0]);
+		}
+	}
+	
+	template <typename T>
 	void initVertices(const T& nv) {
 		verts.resize(nv);
-
+		
 		for (uint32_t i = 0; i < verts.size(); i++) {
 			verts[i] = make<Vertex>(i);
 		}
@@ -576,19 +585,10 @@ private:
 		keymap.reserve(3 * n / 2);
 
 		std::vector<EdgeKey> feKey; feKey.reserve(3);
+
 		for (uint32_t i = 0; i < n; i++) {
 			feKey.clear();
-			if constexpr (util::IsEigen<T>) {
-				for (size_t j = 0, k = (size_t)faceAttrib.cols(); j < k; j++)
-					feKey.emplace_back(faceAttrib(i, j), faceAttrib(i, (j+1)%k));
-			} else if constexpr (util::IsStdvec2d<T>) {
-				for (size_t j = 0, k = faceAttrib[i].size(); j < k; j++)
-					feKey.emplace_back(faceAttrib[i][j], faceAttrib[i][(j+1)%k]);
-			} else {
-				feKey.emplace_back(faceAttrib[i * 3 + 0], faceAttrib[i * 3 + 1]);
-				feKey.emplace_back(faceAttrib[i * 3 + 1], faceAttrib[i * 3 + 2]);
-				feKey.emplace_back(faceAttrib[i * 3 + 2], faceAttrib[i * 3 + 0]);
-			}
+			appendKey(feKey, i, faceAttrib);
 
 			faces.emplace_back(make<Face>(i));
 
@@ -596,14 +596,52 @@ private:
 
 			pte front = nullptr, prev = nullptr;
 			for (size_t j = 0; j < feKey.size(); j++) {
-				auto& first = verts[feKey[j].first], & second = verts[feKey[j].second];
+				auto first = verts[feKey[j].first], second = verts[feKey[j].second];
 
-				pte edge;
+				bool isManifold = true, insertEdge = true;
+				pte edge = nullptr;
+
 				auto find = keymap.find(keyPair(feKey[j]));
 				if (find != keymap.end()) {
 					edge = edges[find->second]->pair;
+					
+					if (edge->face != nullptr) {
+						isManifold = false;
+						keymap.emplace(std::make_pair((uint32_t)(verts.size()), (uint32_t)(verts.size() + 1)), edgeIndex / 2);
+					} else {
+						insertEdge = false;
+					}
 				} else {
-					keymap.emplace(feKey[j], edgeIndex/2);
+					std::tie(std::ignore, isManifold) = keymap.emplace(feKey[j], edgeIndex / 2);
+				}
+
+				//resolve non-manifold edge
+				if (!isManifold) {
+					// duplicate and set original index (modify cleanVertices)
+					first = verts.emplace_back(make<Vertex>((uint32_t)verts.size()));
+					first->id = feKey[j].first;
+					second = verts.emplace_back(make<Vertex>((uint32_t)verts.size()));
+					second->id = feKey[j].second;
+
+					// update previous edge's vertex
+					if (prev != nullptr) {
+						prev->vert = first;
+						first->edge = prev;
+					} else {
+						feKey[feKey.size() - 1].second = static_cast<uint32_t>(verts.size() - 2);
+					}
+
+					// update next edge's vertex
+					if (j == (feKey.size() - 1)) {
+						auto e = edges[keymap.at(feKey[0])];
+						e->pair->vert = second;
+						second->edge = e;
+					} else {
+						feKey[j + 1].first = static_cast<uint32_t>(verts.size() - 1);
+					}
+				}
+
+				if (insertEdge) {
 					edge = edges.emplace_back(make<Halfedge>(edgeIndex++));
 					edge->pair = make<Halfedge>(edgeIndex++);
 					edge->pair->pair = edge;
@@ -628,6 +666,63 @@ private:
 		for (const auto& e : edges) {
 			if (e->pair->face == nullptr)
 				verts[e->vert->id]->edge = e;
+		}
+	}
+
+	// resolve non-manifold condition vertices
+	// check all vertex and edges
+	virtual void cleanVertices() {
+		uint32_t n = (uint32_t)getNumVerts();
+
+		// find condition: edge has more than 3 faces (already checked as vertex index), unreference vertex
+
+		bool existUnref = false;
+		for (uint32_t i = 0; i < n; i++) {
+			if (verts[i]->id != i) {
+				verts[i]->id = i;
+			}
+
+			existUnref |= verts[i]->isUnrefer();
+		}
+
+		if (existUnref) removeUnrefVerts();
+
+		// find condition: an one-ring neighborhood is not a homeomorphism of the disk
+
+		std::vector<bool> earrived(2 * getNumEdges(), false);
+		std::vector<bool> varrived(getNumVerts(), false);
+		std::vector<pte> duplicate;
+
+		for (const auto& edge : edges) {
+			if (earrived[edge->id]) continue;
+
+			auto e = edge, e0 = e;
+			do {
+				earrived[e->id] = true;
+				e = e->next->pair;
+			} while (e != e0 && e->face != nullptr);
+
+			if (!edge->isBoundary()) {
+				if (e->face != nullptr) varrived[edge->vert->id] = true;
+				continue;
+			}
+
+			if (varrived[edge->vert->id]) duplicate.emplace_back(edge);
+			varrived[edge->vert->id] = true;
+		}
+
+		if (duplicate.size() == 0) return;
+
+		for (auto& edge : duplicate) {
+			verts.emplace_back(make<Vertex>((uint32_t)verts.size()));
+			verts.back()->edge = edge;
+			edge->vert = verts.back();
+
+			auto e = edge, e0 = e;
+			do {
+				e->vert = verts.back();
+			} while (e != e0 && e->face != nullptr);
+			if (e->face == nullptr) e->vert = verts.back();
 		}
 	}
 
@@ -669,6 +764,7 @@ public:
 		initVertices((size_t)nv);
 		initFaces(faceAttrib);
 		initBoundary();
+		cleanVertices();
 	}
 
 	void reset(bool resizeObject = true) {
@@ -742,7 +838,9 @@ public:
 		std::vector<std::vector<T>> adlist(this->getNumVerts());
 
 		for (size_t i = 0; i < getNumVerts(); i++) {
-			for (const auto& v: verts[i]->oneringNeighbs()) adlist[i].emplace_back(static_cast<T>(v));
+			auto&& onering = verts[i]->oneringNeighbs();
+			adlist[i].reserve(onering.size());
+			for (const auto& v: onering) adlist[i].emplace_back(static_cast<T>(v));
 			if (self) adlist[i].emplace_back(static_cast<T>(i));
 		}
 		return adlist;
@@ -754,15 +852,16 @@ public:
 		std::vector<std::vector<T>>	flist(getNumFaces());
 
 		for (size_t i = 0; i < getNumFaces(); i++) {
-			for (const auto& v : faces[i]->circuitVerts())
-				flist[i].emplace_back(static_cast<T>(v));
+			auto&& vlist = faces[i]->circuitVerts();
+			flist[i].reserve(vlist.size());
+			for (const auto& v : vlist) flist[i].emplace_back(static_cast<T>(v));
 		}
 		return flist;
 	}
 
 	// k ring neighbors
 	template <typename T = uint32_t>
-	std::vector<T> kRingNeighbs(const size_t src, const size_t k) const {
+	std::vector<T> kRingNeighbs(const uint32_t src, const uint32_t k) const {
 		std::vector<T> neighbs;
 
 		std::deque<std::pair<T, T>> search;
@@ -825,6 +924,21 @@ public:
 		return n;
 	}
 
+	// size_t getNumComponents() const {
+	// 	kika::util::UnionFind uf(getNumVerts());
+	// 	for (const auto& face : faces) {
+	// 		auto&& verts = face->circuitVerts();
+	// 		for (size_t i = 1; i < verts.size(); i++)
+	// 			uf.unite(verts[0], verts[i]);
+	// 	}
+	// 
+	// 	std::set<size_t> set;
+	// 	for (size_t i = 0; i < getNumVerts(); i++) {
+	// 		set.insert(uf.root(i));
+	// 	}
+	// 	return set.size();
+	// }
+	
 	// ----------------- element operation ---------------------
 	
 private:
@@ -838,28 +952,31 @@ private:
 
 	// remove element by swap and pop_back.
 	template <typename T, typename SwapObj = std::vector<uint32_t>, typename SwapFunc = Swapper<typename SwapObj::value_type>>
-	void removeElement(T& elem, SwapObj* swapOrder = nullptr) {
+	void removeElement(T elem, SwapObj* swapOrder = nullptr) {
 		if constexpr (std::is_same_v<T, ptv>) {
 			if (swapOrder != nullptr) {
 				if constexpr (!std::is_same_v<SwapFunc, void>) SwapFunc{}(elem->id, *swapOrder);
 			}
+			auto rm = verts[elem->id];
 			verts.back()->id = elem->id;
 			verts[elem->id] = verts.back();
+			rm->~Vertex();
 			verts.pop_back();
-			elem->~Vertex();
 		} else if constexpr (std::is_same_v<T, pte>) {
 			auto id = elem->uid();
+			auto rm = edges[id];
 			edges.back()->id = 2 * id;
 			edges.back()->pair->id = 2 * id + 1;
 			edges[id] = edges.back();
+			rm->pair->~Halfedge();
+			rm->~Halfedge();
 			edges.pop_back();
-			elem->pair->~Halfedge();
-			elem->~Halfedge();
 		} else {
+			auto rm = faces[elem->id];
 			faces.back()->id = elem->id;
 			faces[elem->id] = faces.back();
+			rm->~Face();
 			faces.pop_back();
-			elem->~Face();
 		}
 	}
 
@@ -906,7 +1023,7 @@ public:
 
 	template <typename SwapObj = std::vector<uint32_t>, typename SwapFunc = Swapper<typename SwapObj::value_type>>
 	bool remove(ptv vert, SwapObj* swapOrder = nullptr) {
-		// same as vert->isRemovable()
+		// same as vert->isRemovable(), we need incidentEdges later process
 		auto&& ies = vert->incidentEdges<Ptr>();
 		for (auto& e : ies) {
 			if (!e->isBoundary() && e->pair->vert->isBoundary() && 
@@ -982,9 +1099,10 @@ public:
 		return true;
 	}
 
-	template <typename I = size_t>
-	std::vector<I> removeUnrefVerts() {
-		std::vector<I> swapOrder(getNumVerts());
+	template <typename T = uint32_t>
+	std::vector<T> removeUnrefVerts() {
+		std::vector<T> swapOrder(getNumVerts());
+		std::iota(swapOrder.begin(), swapOrder.end(), 0);
 		for (size_t i = 0; i < getNumVerts();) {
 			if (verts[i]->isUnrefer()) { removeElement(verts[i], &swapOrder); } else { i++; }
 		}
@@ -1127,7 +1245,7 @@ public:
 	}
 
 	// get dual mesh
-	// preserve prim->dual->prim(pdp) mesh boundaries : 
+	// make to preserve prim->dual->prim (pdp) mesh boundaries : 
 	// for (auto& face : pdp.faces) {
 	// 	if (face->isBoundary()) prim.remove(face);
 	// }
@@ -1135,14 +1253,62 @@ public:
 		return HalfedgeMesh(getNumFaces() + getNumBoundaryEdges(), dualFaceList());
 	}
 
-	HalfedgeMesh triangleMesh() const {
-		return HalfedgeMesh(getNumVerts(), util::faces2indices(faceList()));
+	// @return : polygon -> tris
+	std::unordered_map<uint32_t, std::vector<uint32_t>> triangulate() {
+		std::vector<std::array<uint32_t, 3>> tris;
+		tris.reserve(getNumFaces());
+
+		std::unordered_map<uint32_t, std::vector<uint32_t>> triMap;
+		uint32_t counter = 0;
+
+		for (uint32_t fi = 0; fi < getNumFaces(); fi++) {
+			auto&& es = faces[fi]->circuitEdges<Ptr>();
+
+			// find slice edge (sliced tri has three adjacent faces (if edge is boundary, count as one face))
+			if (es.size() > 3) {
+				size_t s = 0, k = es.size();
+				while (s < k) {
+					auto edge = es[s];
+					if ((edge->next->pair->face == nullptr || edge->next->pair->face != edge->next->next->pair->face) &&
+						  (edge->pair->face == nullptr || edge->pair->face != edge->prev()->pair->face)) break;
+					s++;
+				}
+
+				uint32_t i = es[s]->vert->id, t = es[(s+1)%k]->vert->id;
+				for (size_t j = 0; j < k-2; j++) {
+					uint32_t r = es[(s+2+j)%k]->vert->id;
+					tris.push_back(std::array<uint32_t, 3>{i, t, r});
+					triMap[fi].emplace_back(counter++);
+					t = r;
+				}
+			} else {
+				tris.emplace_back(std::array<uint32_t, 3>{
+					es[0]->vert->id, es[1]->vert->id, es[2]->vert->id});
+				triMap[fi].emplace_back(counter++);
+			}
+		}
+
+		if (counter != getNumFaces()) {
+			auto _nv = getNumVerts();
+			this->reset(true);
+			this->build(_nv, tris);
+		}
+		return triMap;
 	}
 
+	HalfedgeMesh triangleMesh() const {
+		HalfedgeMesh copy = *this;
+		copy.triangulate();
+		return copy;
+	}
+
+	/// @return vertex-map : original mesh vertex index -> masked mesh vertex index
+	/// vmap[100] -> 0, vmap[2000] -> 1
 	template <typename T = uint32_t>
-	std::pair<HalfedgeMesh, std::map<uint32_t, uint32_t>> mask(const std::vector<T>& maskFacesIndex) const {
+	std::pair<HalfedgeMesh, std::map<uint32_t, uint32_t>> fmask(const std::vector<T>& maskFacesIndex) const {
 		std::vector<uint32_t> maskVerts;
 		std::map<uint32_t, uint32_t> vertexMap;
+		maskVerts.reserve(getNumVerts());
 
 		std::vector<std::vector<uint32_t>> maskFaces(maskFacesIndex.size());
 		for (size_t i = 0; i < maskFacesIndex.size(); i++) {
@@ -1160,6 +1326,40 @@ public:
 		}
 
 		return { HalfedgeMesh(maskVerts.size(), maskFaces), vertexMap };
+	}
+
+	// triangulated flatten face index list
+	std::vector<uint32_t> indexList() const {
+		std::vector<uint32_t> tris;
+		tris.reserve(getNumFaces() * 3);
+
+		for (uint32_t fi = 0; fi < getNumFaces(); fi++) {
+			auto&& es = faces[fi]->circuitEdges<Ptr>();
+			if (es.size() > 3) {
+				size_t s = 0, k = es.size();
+				while (s < k) {
+					auto edge = es[s];
+					if (edge->next->pair->face != edge->next->next->pair->face &&
+						edge->prev()->pair->face != edge->pair->face) break;
+					s++;
+				}
+
+				uint32_t i = es[s]->vert->id, t = es[(s + 1) % k]->vert->id;
+				for (size_t j = 0; j < k - 2; j++) {
+					uint32_t r = es[(s + 2 + j) % k]->vert->id;
+					tris.emplace_back(i);
+					tris.emplace_back(t);
+					tris.emplace_back(r);
+					t = r;
+				}
+			} else {
+				tris.emplace_back(es[0]->vert->id);
+				tris.emplace_back(es[1]->vert->id);
+				tris.emplace_back(es[2]->vert->id);
+			}
+		}
+
+		return tris;
 	}
 
 };

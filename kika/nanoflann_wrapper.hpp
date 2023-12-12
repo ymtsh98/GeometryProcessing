@@ -1,5 +1,8 @@
 #pragma once
+#pragma warning(push) 
+#pragma warning (disable : 4244)
 #include <nanoflann.hpp>
+#pragma warning(pop)
 
 namespace kika::knn {
 
@@ -19,12 +22,12 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 
 	public:
 
-		NanoFlannKNN(const Eigen::DenseBase<Derived>& pts, const int maxLeaf = 10) : coords(pts.cast<float>()), tree(pts.cols(), coords, maxLeaf), maxLeaf(maxLeaf) {}
+		NanoFlannKNN(const Eigen::DenseBase<Derived>& pts, const int maxLeaf = 10) : coords(pts.cast<float>()), tree((int)pts.cols(), coords, maxLeaf), maxLeaf(maxLeaf) {}
 
 		void getNearestNeighbor(const float* query, size_t& index, float& dist) const {
 			nanoflann::KNNResultSet<float> resultSet(1);
 			resultSet.init(&index, &dist);
-			tree.index->findNeighbors(resultSet, query, nanoflann::SearchParameters());
+			tree.index_->findNeighbors(resultSet, query, nanoflann::SearchParameters());
 		}
 
 		size_t getNearestNeighbor(const float* query) const {
@@ -56,7 +59,7 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 
 			nanoflann::KNNResultSet<float> resultSet(k);
 			resultSet.init(&indices[0], &dists[0]);
-			tree.index->findNeighbors(resultSet, query, nanoflann::SearchParameters());
+			tree.index_->findNeighbors(resultSet, query, nanoflann::SearchParameters());
 		}
 
 		template <typename T = size_t>
@@ -86,7 +89,7 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 
 		void getRNearestNeighbor(const float* query, const float r,
 			std::vector<std::pair<Eigen::Index, float>>& indicesDists) const {
-			tree.index->radiusSearch(query, r, indicesDists, nanoflann::SearchParameters());
+			tree.index_->radiusSearch(query, r, indicesDists, nanoflann::SearchParameters());
 		}
 
 		template <typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>

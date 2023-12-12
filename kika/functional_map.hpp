@@ -48,7 +48,7 @@ namespace kika::fm {
 // @param pmap : point-wise map (src -> trg) (n_trg x 1)
 inline std::vector<uint32_t> nearestNeighbors(
 	const Eigen::MatrixXd& srcData, const Eigen::MatrixXd& trgData) {
-	return knn::FaissKNN<false>::nearestNeighbors<uint32_t>(srcData, trgData);
+	return knn::nanoflann<uint32_t>(srcData, trgData);
 }
 
 // recover point-wise map by fast sinkhorn filter
@@ -66,10 +66,10 @@ inline std::vector<uint32_t> fastSinkhorn(
 	auto setKernelTriplets = [&k, &lambda](const Eigen::MatrixXd& X, const Eigen::MatrixXd& Y,
 		std::vector<Eigen::Triplet<double>>& triplets, const bool transpose = false) {
 
-		std::vector<std::vector<uint32_t>> knnIndices;
+		std::vector<std::vector<size_t>> knnIndices;
 		std::vector<std::vector<float>> knnDistances;
 
-		knn::FaissKNN<false> tree(Y);
+		knn::NanoFlannKNN tree(Y);
 		tree.getKNearestNeighbors(X, k, knnIndices, knnDistances);
 
 		double l = lambda;
@@ -80,6 +80,7 @@ inline std::vector<uint32_t> fastSinkhorn(
 		}
 		l /= *std::max_element(vals.begin(), vals.end());
 
+		triplets.reserve(triplets.size() + X.rows() * k);
 		for (Eigen::Index i = 0; i < X.rows(); i++) {
 			for (size_t j = 0; j < knnIndices[i].size(); j++) {
 				if (transpose)
@@ -94,16 +95,35 @@ inline std::vector<uint32_t> fastSinkhorn(
 	setKernelTriplets(trgData, srcData, triplets, true);
 	kernel.setFromTriplets(triplets.begin(), triplets.end());
 
-	Eigen::VectorXd alpha = Eigen::VectorXd::Constant(trgData.rows(), 1. / trgData.rows());
-	Eigen::VectorXd beta = Eigen::VectorXd::Constant(srcData.rows(), 1. / srcData.rows());
-	Eigen::VectorXd  u = alpha, v = beta;
+
+	Eigen::VectorXd alpha = Eigen::VectorXd::Constant(srcData.rows(), 1. / srcData.rows());
+	Eigen::VectorXd beta = Eigen::VectorXd::Constant(trgData.rows(), 1. / trgData.rows());
+	Eigen::VectorXd u = alpha, v = beta;
 	for (size_t i = 0; i < iter; i++) {
-		u = (alpha.array() / (kernel.transpose() * v).array()).eval();
-		v = (beta.array() / (kernel * u).array()).eval();
+		u = alpha.array() / (kernel * (beta.array() / (u.transpose() * kernel).transpose().array()).matrix()).array();
+		if (i % 20 == 0) {
+			v = (beta.array() / (kernel.transpose() * u).array()).eval();
+			u = (alpha.array() / (kernel * v).array()).eval();
+		}
 	}
 
-	Eigen::SparseMatrix<double> P = (v.asDiagonal()* kernel* u.asDiagonal());
+	v = (beta.array() / (kernel.transpose() * u).array()).eval();
+	u = (alpha.array() / (kernel * v).array()).eval();
+
+	Eigen::SparseMatrix<double> P = (u.asDiagonal() * (kernel * v.asDiagonal()));
 	return kika::eig::spArgMax(P, false);
+
+	//// in paper 
+	// Eigen::VectorXd alpha = Eigen::VectorXd::Constant(trgData.rows(), 1. / trgData.rows());
+	// Eigen::VectorXd beta = Eigen::VectorXd::Constant(srcData.rows(), 1. / srcData.rows());
+	// Eigen::VectorXd  u = alpha, v = beta;
+	// for (size_t i = 0; i < iter; i++) {
+	// 	u = (alpha.array() / (kernel.transpose() * v).array()).eval();
+	// 	v = (beta.array() / (kernel * u).array()).eval();
+	// }
+	// 
+	// Eigen::SparseMatrix<double> P = (v.asDiagonal()* kernel* u.asDiagonal());
+	// return kika::eig::spArgMax(P, false);
 }
 
 // recover point-wise map by sinkhorn filter(full compute kernel)
@@ -144,17 +164,25 @@ struct NearestNeighbors {
 };
 
 struct FastSinkhorn {
-	const size_t k = 40;
-	const size_t iter = 40;
-	const double lambda = 400.;
+	size_t k;
+	size_t iter;
+	double lambda;
+
+	FastSinkhorn() : k(40), iter(40), lambda(400.) {}
+	FastSinkhorn(size_t k, size_t iter, double lambda) : k(k), iter(iter), lambda(lambda) {}
+
 	std::vector<uint32_t> operator()(const Eigen::MatrixXd& srcData, const Eigen::MatrixXd& trgData) const {
 		return fastSinkhorn(srcData, trgData, k, iter, lambda);
 	}
 };
 
 struct FullSinkhorn {
-	const size_t iter = 40;
-	const double lambda = 400.;
+	size_t iter;
+	double lambda;
+
+	FullSinkhorn() : iter(40), lambda(400.) {}
+	FullSinkhorn(size_t iter, double lambda) : iter(iter), lambda(lambda) {}
+
 	std::vector<uint32_t> operator()(const Eigen::MatrixXd& srcData, const Eigen::MatrixXd& trgData) const {
 		return fullSinkhorn(srcData, trgData, 0, iter, lambda);
 	}
@@ -196,8 +224,23 @@ Eigen::MatrixXd zoomout(const Eigen::MatrixXd& fmap,
 	
 	auto corres = p2pFunc(srcEvecs.leftCols(current) * fmap.block(0, 0, current, current).transpose(), trgEvecs.leftCols(current));
 
-	return kika::eig::pinvSolve(trgEvecs.leftCols(current+stride), 
+	return kika::eig::pinvSolve(trgEvecs.leftCols(current+stride),
 		srcEvecs.leftCols(current+stride)(corres, Eigen::all));
+}
+
+// refine functional map by zoomout
+// @param fmap : functionla map (trg -> src) (k_trg x k_src)
+// @return fmap : (k_trg + stride x k_src + stride)
+// (Ref) ZoomOut: Spectral Upsampling for Efficient Shape Correspondence[Melzi, S, et al. 2019]
+template <class T = NearestNeighbors>
+Eigen::MatrixXd zoomout(const Eigen::MatrixXd& fmap,
+	const Eigen::MatrixXd& srcEvecs, const Eigen::MatrixXd& trgEvecs,
+	const size_t current1, const size_t current2, const size_t stride1 = 1, const size_t stride2 = 1, const T& p2pFunc = T{}) {
+
+	auto corres = p2pFunc(srcEvecs.leftCols(current1) * fmap.block(0, 0, current2, current1).transpose(), trgEvecs.leftCols(current2));
+
+	return kika::eig::pinvSolve(trgEvecs.leftCols(current2+stride2),
+		srcEvecs.leftCols(current1+stride1)(corres, Eigen::all));
 }
 
 }
@@ -215,7 +258,7 @@ template <typename F = NearestNeighbors>
 inline Eigen::MatrixXd discreteOptimizeOrtho(
 	std::vector<uint32_t>& corres,
 	const Eigen::MatrixXd& srcEvecs, const Eigen::MatrixXd& trgEvecs,
-	const size_t current, const size_t stride, const size_t iter = 5, F p2pFunc = F{}) {
+	const size_t current, const size_t stride, const size_t iter = 5, const F& p2pFunc = F{}) {
 
 	size_t r = current + stride;
 	
@@ -238,7 +281,7 @@ inline Eigen::MatrixXd discreteOptimizeConformal(
 	std::vector<uint32_t>& corres,
 	const Eigen::VectorXd& srcEvals, const Eigen::MatrixXd& srcEvecs,
 	const Eigen::VectorXd& trgEvals, const Eigen::MatrixXd& trgEvecs,
-	const size_t current, const size_t stride, const size_t iter = 5, F p2pFunc = F{}) {
+	const size_t current, const size_t stride, const size_t iter = 5, const F& p2pFunc = F{}) {
 
 	size_t r = current + stride;
 
@@ -264,24 +307,81 @@ inline Eigen::MatrixXd discreteOptimizeConformal(
 template <typename F = NearestNeighbors>
 inline Eigen::MatrixXd discreteOptimizeDescs(
 	std::vector<uint32_t>& corres,
-	const Eigen::VectorXd& srcEvals, const Eigen::MatrixXd& srcEvecs, const Eigen::MatrixXd& srcDescs, 
-	const Eigen::VectorXd& trgEvals, const Eigen::MatrixXd& trgEvecs, const Eigen::MatrixXd& trgDescs, 
-	const size_t current, const size_t stride, const size_t iter = 5, const double alpha = 1e-3, F p2pFunc = F{}) {
+	const Eigen::MatrixXd& srcEvecs, const Eigen::MatrixXd& srcDescs, 
+	const Eigen::MatrixXd& trgEvecs, const Eigen::MatrixXd& trgDescs, 
+	const size_t current, const size_t stride, const size_t iter = 5, const double alpha = 1e-3, const F& p2pFunc = F{}) {
 
 	size_t r = current + stride;
 
-	Eigen::VectorXd sevals = srcEvals.topRows(r), tevals = trgEvals.topRows(r);
-	sevals.array() /= sevals.sum();
-	tevals.array() /= tevals.sum();
 
 	Eigen::MatrixXd srcData(srcEvecs.rows(), srcDescs.cols() + r);
 	Eigen::MatrixXd trgData(trgEvecs.rows(), trgDescs.cols() + r);
-	srcData.leftCols(srcDescs.cols()) = alpha * eig::pinvSolve(srcEvecs, srcDescs);
-	trgData.leftCols(trgDescs.cols()) = alpha * eig::pinvSolve(trgEvecs, trgDescs);
+	srcData.leftCols(srcDescs.cols()) = alpha * srcEvecs * eig::pinvSolve(srcEvecs, srcDescs);
+	trgData.leftCols(trgDescs.cols()) = alpha * trgEvecs * eig::pinvSolve(trgEvecs, trgDescs);
 	trgData.rightCols(r) = trgEvecs.leftCols(r);
 
 	Eigen::MatrixXd fmap;
 	for (size_t i = 0; i < iter+1; i++) {
+		fmap = kika::eig::pinvSolve(trgEvecs.leftCols(r), srcEvecs.leftCols(r)(corres, Eigen::all));
+		srcData.rightCols(r) = srcEvecs.leftCols(r) * fmap.transpose();
+		corres = p2pFunc(srcData, trgData);
+	}
+
+	return fmap;
+}
+
+// minimize descriptors preserving energy
+// min E_desc = ||C * C.T - I||^2 + alpha * ||F_trg * C - F_src||^2
+// @param corres : point-wise map (src -> trg) (trg x 1)
+// @return fmap :  functional map (trg -> src) (k_trg x k_src)
+template <typename F = NearestNeighbors>
+inline Eigen::MatrixXd discreteOptimizePos(
+	std::vector<uint32_t>& corres,
+	const Eigen::MatrixXd& srcEvecs, const Eigen::MatrixXd& srcPos,
+	const Eigen::MatrixXd& trgEvecs, const Eigen::MatrixXd& trgPos,
+	const size_t current, const size_t stride, const size_t iter = 5, const double alpha = 1e-3, const F& p2pFunc = F{}) {
+
+	size_t r = current + stride;
+
+
+	Eigen::MatrixXd srcData(srcEvecs.rows(), srcPos.cols() + r);
+	Eigen::MatrixXd trgData(trgEvecs.rows(), srcPos.cols() + r);
+	srcData.leftCols(srcPos.cols()) = alpha * srcPos;
+	trgData.leftCols(trgPos.cols()) = alpha * trgPos;
+	trgData.rightCols(r) = trgEvecs.leftCols(r);
+
+	Eigen::MatrixXd fmap;
+	for (size_t i = 0; i < iter+1; i++) {
+		fmap = kika::eig::pinvSolve(trgEvecs.leftCols(r), srcEvecs.leftCols(r)(corres, Eigen::all));
+		srcData.leftCols(srcPos.cols()) = alpha *  srcPos(corres, Eigen::all);
+		srcData.rightCols(r) = srcEvecs.leftCols(r) * fmap.transpose();
+		corres = p2pFunc(srcData, trgData);
+	}
+
+	return fmap;
+}
+
+// minimize descriptors preserving energy
+// min E_desc = ||C * C.T - I||^2 + alpha * ||F_trg - F_src||^2
+// @param corres : point-wise map (src -> trg) (trg x 1)
+// @return fmap :  functional map (trg -> src) (k_trg x k_src)
+template <typename F = NearestNeighbors>
+inline Eigen::MatrixXd discreteOptimizeDescsDirect(
+	std::vector<uint32_t>& corres,
+	const Eigen::MatrixXd& srcEvecs, const Eigen::MatrixXd& srcDescs,
+	const Eigen::MatrixXd& trgEvecs, const Eigen::MatrixXd& trgDescs,
+	const size_t current, const size_t stride, const size_t iter = 5, const double alpha = 1e-3, const F& p2pFunc = F{}) {
+
+	size_t r = current + stride;
+
+	Eigen::MatrixXd srcData(srcEvecs.rows(), srcDescs.cols() + r);
+	Eigen::MatrixXd trgData(trgEvecs.rows(), trgDescs.cols() + r);
+	srcData.leftCols(srcDescs.cols()) = alpha * srcDescs;
+	trgData.leftCols(trgDescs.cols()) = alpha * trgDescs;
+	trgData.rightCols(r) = trgEvecs.leftCols(r);
+
+	Eigen::MatrixXd fmap;
+	for (size_t i = 0; i < iter + 1; i++) {
 		fmap = kika::eig::pinvSolve(trgEvecs.leftCols(r), srcEvecs.leftCols(r)(corres, Eigen::all));
 		srcData.rightCols(r) = srcEvecs.leftCols(r) * fmap.transpose();
 		corres = p2pFunc(srcData, trgData);
@@ -299,13 +399,16 @@ namespace kika::fm {
 // @return cmh : |V|x(k+3) [evecs, cmh];
 //
 // (Ref) CMH: Coordinates Manifold Harmonics for Functional Remeshing[Riccardo, M. et al. 2019]
-inline Eigen::MatrixXd coordinateManifoldHarmonics(const Eigen::MatrixX3d& pos, const Eigen::MatrixXd& evecs) {
+inline Eigen::MatrixXd coordinateManifoldHarmonics(const Eigen::MatrixX3d& pos, const Eigen::MatrixXd& evecs, 
+	const Eigen::VectorXd& vareas) {
 	size_t k = (size_t)pos.cols();
 	Eigen::MatrixX3d error =	pos - evecs * eig::pinvSolve(evecs, pos);
 	Eigen::MatrixXd cmh = evecs;
 
 	for (size_t i = 0; i < k; i++) {
 		Eigen::VectorXd mcmh = error.col(i) - cmh * eig::pinvSolve(cmh, error.col(i));
+		double norm = sqrt(mcmh.transpose() * vareas.asDiagonal() * mcmh);
+		mcmh.array() /= norm;
 		eig::hAppendDenseMat(cmh, mcmh.normalized());
 	}
 

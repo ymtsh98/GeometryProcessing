@@ -11,7 +11,7 @@
 
 namespace kika::util {
 /// implementation of Fast Approximation of Laplace-Beltrami Eigenproblems [SGP 2018]
-class LboEigs {
+class FastApproxEigs {
 	kika::heds::SurfaceMesh& mesh;
 	kika::diff::DiscreteLaplacian& dsl;
 
@@ -101,9 +101,10 @@ class LboEigs {
 		};
 
 		std::vector<Eigen::Triplet<double>> triplets;
+		triplets.reserve(samples.size());
 		std::vector<bool> covered(mesh.getNumVerts(), false);
 
-		kika::gd::FastMarchingSolver gdsolver(mesh);
+		kika::gd::VirtualSourceSolver gdsolver(mesh);
 		for (size_t i = 0; i < samples.size(); i++) {
 			auto dist = gdsolver.solve({ samples[i] }, std::numeric_limits<uint32_t>::max(), ranges[i]).dist();
 
@@ -201,7 +202,7 @@ public:
 	Eigen::SparseMatrix<double> prolongOp;
 
 	// @param sampleSize : (defalut) 5 * n
-	LboEigs(kika::heds::SurfaceMesh& mesh, kika::diff::DiscreteLaplacian& dsl, const size_t n, size_t sampleSize = 0) :
+	FastApproxEigs(kika::heds::SurfaceMesh& mesh, kika::diff::DiscreteLaplacian& dsl, const size_t n, size_t sampleSize = 0) :
 		mesh(mesh), dsl(dsl), cusolverHandle(nullptr) {
 		if (sampleSize == 0) sampleSize = std::min<size_t>(5 * n, mesh.getNumVerts());
 		if (sampleSize < n) sampleSize = n;
@@ -212,9 +213,10 @@ public:
 		dsl.vertexAreas();
 
 		surfaceArea = mesh.surfaceArea();
-		blueNoiseSampling(sampleSize);
 
+		blueNoiseSampling(sampleSize);
 		computeLocalBasis();
+
 		Eigen::MatrixXd L = prolongOp.transpose() * dsl.lbo * prolongOp;
 		Eigen::MatrixXd M = prolongOp.transpose() * dsl.s0.asDiagonal() * prolongOp;
 
@@ -227,7 +229,7 @@ public:
 
 		Eigen::VectorXd m = (evecs.transpose() * M * evecs).diagonal();
 		evecs = evecs.array().rowwise() * m.cwiseSqrt().cwiseInverse().array().transpose();
-		evecs = (prolongOp * evecs).leftCols(n).eval();
+		evecs = evecs.leftCols(n).eval();
 		evals = evals.cwiseAbs().topRows(n).eval();
 	}
 

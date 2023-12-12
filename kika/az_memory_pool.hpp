@@ -47,7 +47,7 @@ public:
 	template <typename T>
 	[[nodiscard]] char* bind() {
 		static_assert((std::is_same_v<T, MTypes> || ... || std::is_same_v<T, MType>), "AZMemoryPool(bind) : T does not match MTypes.");
-		if (offset + sizeof(T) > bufferSize) exalloc(offset+sizeof(T));
+		if (offset + sizeof(T) > bufferSize) exalloc(offset+sizeof(T)); // memBuffers.back() size * 2 memory allocation 
 		offset += sizeof(T);
 		return memBuffers[slot]+(offset-sizeof(T));
 	}

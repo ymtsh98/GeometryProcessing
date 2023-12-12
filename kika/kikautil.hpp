@@ -51,10 +51,10 @@ concept IsStdvec2d = requires(T t) {
   t[0][0];
 };
 
+/*
 template <typename T>
 concept IsScalar = std::is_scalar_v<T>;
 
-/*
 template <typename T, class = void>
 struct IsEigen : std::false_type {};
 
@@ -103,7 +103,7 @@ std::vector<I> vecrange(const size_t start, const size_t end) {
 	return vec;
 }
 
-template <typename S1, typename T, typename S2 = T::value_type, class = std::void_t<decltype(std::declval<T>().begin())>>
+template <typename S1, typename T, typename S2 = typename T::value_type, class = std::void_t<decltype(std::declval<T>().begin())>>
 std::vector<S1> vecast(const T& vec) {
 	#pragma warning (push) 
 	#pragma warning (disable : 4244)
@@ -128,6 +128,20 @@ std::vector<T> vecrand(const size_t size, const T1& lower, const T2& higher, con
 	std::vector<T> v(size);
 	for (auto& item : v) item = dis(engine);
 	return v;
+}
+
+// complement vector of input index vector 
+template <typename T = int>
+std::vector<T> complement(const size_t size, const std::vector<T>& vec) {
+	std::vector<bool> inout(size, false);
+	for (auto i : vec) inout[i] = true;
+
+	std::vector<T> covec;
+	covec.reserve(size - vec.size());
+	for (size_t i = 0; i < size; i++) {
+		if (!inout[i]) covec.emplace_back(static_cast<T>(i));
+	}
+	return covec;
 }
 
 template <typename I=size_t>
@@ -183,6 +197,15 @@ public:
 
 	std::size_t count = 0;
 };
+
+template <typename T>
+size_t numVecIntersect(std::vector<T>&& s1, std::vector<T>&& s2) {
+	std::sort(s1.begin(), s1.end());
+	std::sort(s2.begin(), s2.end());
+	pushBackCounter<uint32_t> pbc;
+	std::set_union(s1.begin(), s1.end(), s2.begin(), s2.end(), std::back_inserter(pbc));
+	return pbc.count;
+}
 
 namespace impl {
 /// convert col-major vector to row-major
@@ -323,13 +346,13 @@ inline double computeVolume(const Eigen::MatrixX3d& verts, const std::vector<T>&
 }
 
 // distance between p and plane(n, v(any point on plane))
-inline double pointe2planeDist(const Eigen::Vector3d& p, const Eigen::Vector3d& n, const Eigen::Vector3d& v = Eigen::Vector3d::Zero()) {
+inline double point2planeDist(const Eigen::Vector3d& p, const Eigen::Vector3d& n, const Eigen::Vector3d& v = Eigen::Vector3d::Zero()) {
 	return p.dot(n) - v.dot(n);
 }
 
 // project p to plane(n, v(any point on plane))
 inline Eigen::Vector3d project2plane(const Eigen::Vector3d& p, const Eigen::Vector3d& n, const Eigen::Vector3d& v = Eigen::Vector3d::Zero()) {
-	return p - (pointe2planeDist(p, n, v)) * n;
+	return p - (point2planeDist(p, n, v)) * n;
 }
 
 // compute an arbitary tangent basis
@@ -595,7 +618,8 @@ struct Timer {
 
 	Timer(std::string_view str="") : start(std::chrono::high_resolution_clock::now()), str(str), printStatus(true) {}
 
-	void restart() {
+	void restart(std::string_view str="") {
+		if (str.size()) this->str = str;
 		printStatus = true;
 		start = std::chrono::high_resolution_clock::now();
 	}

@@ -34,6 +34,18 @@ inline bool checkFileExtension(const std::string& path, const std::string& fext)
 	return path.length() > fext.length() &&
 		std::equal(path.rbegin(), path.rbegin() + fext.length(), fext.rbegin());
 }
+
+// get file name from path
+inline std::string getFileName(std::string path) {
+	auto find = path.rfind('/');
+	int pos = -1;
+	if (find != std::string::npos) pos = (int)find;
+	path = path.substr(pos + 1);
+
+	path = path.substr(0, path.rfind('.'));
+	return path;
+}
+
 }
 
 namespace kika::util {
@@ -79,7 +91,7 @@ public:
 	}
 
 	void open(std::string_view path) {
-		std::ifstream file(path, std::ios::in);
+		std::ifstream file(path.data(), std::ios::in);
 		if (file.fail()) {
 			std::cerr << "Failed to open file : " << path << std::endl;
 			exit(1);
