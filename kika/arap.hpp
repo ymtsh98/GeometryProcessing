@@ -28,11 +28,11 @@ class LocalARAPDeformer {
 	std::vector<uint32_t> full2comp; // full mesh index to compute region index
 	std::vector<bool> uncompute; // is i-th vertex computed
 
-	bool classicARAP;
+	bool classicalARAP;
 
 public:
 
-	LocalARAPDeformer() : w(1.), s(1.), r(1.), sre(0.04), classicARAP(false) {}
+	LocalARAPDeformer() : w(1.), s(1.), r(1.), sre(0.04), classicalARAP(false) {}
 
 	// @param computeVertIdx : (optional) compute region
 	// @param controlVertIdx : (optional) hard constraint control region
@@ -40,7 +40,7 @@ public:
 	template <typename T1 = int, typename T2 = int>
 	LocalARAPDeformer(const kika::heds::SurfaceMesh& mesh, const Eigen::SparseMatrix<double>& lbo, const Eigen::VectorXd& vareas,
 		const double w = 1.0, const double s = 0.001, const std::vector<T1>& computeVertIdx ={}, const std::vector<T2>& controlVertIdx ={})
-		: w(1.), s(1.), r(1.), sre(0.04), classicARAP(false) {
+		: w(1.), s(1.), r(1.), sre(0.04), classicalARAP(false) {
 
 		build(mesh, lbo, vareas, w, s, computeVertIdx, controlVertIdx);
 	}
@@ -126,7 +126,7 @@ public:
 		size_t nv = onerings.size();
 
 		r = (w * vareas.array()).matrix().maxCoeff() / s + eps;
-		if (classicARAP) r = 0.;
+		if (classicalARAP) r = 0.;
 
 		if (computeIdx.size() == nv) solver.compute(lbo + r * kika::eig::speye(vareas.rows()));
 		else solver.compute(kika::eig::spsub(lbo + r * kika::eig::speye(vareas.rows()), computeIdx));
@@ -142,8 +142,8 @@ public:
 
 	// use classic ARAP methods
 	// WARNING : can not use soft constraint in the same time
-	void useClassicARAP(const bool use) {
-		classicARAP = use;
+	void useClassicalARAP(const bool use) {
+		classicalARAP = use;
 	}
 
 	// update smooth rotation enhance coeff
@@ -331,7 +331,7 @@ public:
 			// // step 2
 			Eigen::MatrixX3d Z = smoothlyClampedL1Norm(defmRestrict, restRestrict, U);
 			Eigen::MatrixX3d scl1Rhs = r * (restRestrict + Z - U);
-			if (classicARAP) scl1Rhs.setZero();
+			if (classicalARAP) scl1Rhs.setZero();
 
 			// step -
 			Eigen::MatrixX3d B = scl1Rhs + fixedLhsRestrict + arapRhs(restRestrict);
@@ -369,7 +369,7 @@ public:
 			// step 2
 			Eigen::MatrixX3d Z = smoothlyClampedL1Norm(defm, rest, U);
 			Eigen::MatrixX3d scl1Rhs = r * (rest + Z - U);
-			if (classicARAP) scl1Rhs.setZero();
+			if (classicalARAP) scl1Rhs.setZero();
 
 			// step -
 			Eigen::MatrixX3d B = fixedLhs + scl1Rhs + arapRhs(rest);
