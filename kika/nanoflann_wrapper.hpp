@@ -88,13 +88,13 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 		}
 
 		void getRNearestNeighbor(const float* query, const float r,
-			std::vector<std::pair<Eigen::Index, float>>& indicesDists) const {
+			std::vector<nanoflann::ResultItem<Eigen::Index, float>>& indicesDists) const {
 			tree.index_->radiusSearch(query, r, indicesDists, nanoflann::SearchParameters());
 		}
 
 		template <typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
 		void getRNearestNeighbors(const Eigen::DenseBase<Deriv>& pts, const float r,
-			std::vector<std::vector<std::pair<Eigen::Index, float>>>& indicesDists) const {
+			std::vector<std::vector<nanoflann::ResultItem<Eigen::Index, float>>>& indicesDists) const {
 			indicesDists.resize(pts.rows());
 
 			Eigen::Matrix<float, R, C, Eigen::RowMajor> tmp = pts.cast<float>();
@@ -107,7 +107,7 @@ template <typename Derived, typename Scalar = Derived::Scalar,
 
 		template <typename T = size_t, typename Deriv, int R = Deriv::RowsAtCompileTime, int C = Deriv::ColsAtCompileTime>
 		std::vector<std::vector<T>> getRNearestNeighbors(const Eigen::DenseBase<Deriv>& pts, const float r) const {
-			std::vector<std::vector<std::pair<Eigen::Index, float>>> indicesDists;
+			std::vector<std::vector<nanoflann::ResultItem<Eigen::Index, float>>> indicesDists;
 			getRNearestNeighbors(pts, r, indicesDists);
 
 			std::vector<std::vector<T>> indices(indicesDists.size());

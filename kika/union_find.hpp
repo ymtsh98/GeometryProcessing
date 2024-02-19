@@ -38,6 +38,13 @@ public:
 	std::vector<Index> getParentTree() {
 		return parents;
 	}
+
+	std::vector<Index> getRoots() {
+		std::vector<Index> roots(parents.size());
+		for (Index i = 0; i < (Index)roots.size(); i++) roots[i] = root(i);
+		return roots;
+	}
+
 };
 
 template <typename T1, typename T2>

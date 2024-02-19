@@ -8,6 +8,8 @@
 #include <random>
 #include <complex>
 #include <functional>
+#include <set>
+#include <unordered_set>
 
 #if __has_include("Eigen/Eigen")
 #include <Eigen/Core>
@@ -20,40 +22,42 @@
 /// concept and SFINAE
 /// 
 namespace kika::util {
-
+#if _MSVC_LANG >= 202002L || __cplusplus >= 202002L
 template <typename T>
 concept IsEigen = requires(T t) {
-  t.rows;
-  t.cols;
+	t.rows;
+	t.cols;
 };
 
 template <typename T>
 concept IsGlm = requires(T t) {
-  t.x;
-  t.r;
-  t.length;
+	t.x;
+	t.r;
+	t.length;
 };
 
 template <typename T>
 concept IsStdvec = requires(T t) {
-  t.push_back;
-  t.shrink_to_fit;
+	t.push_back;
+	t.shrink_to_fit;
 };
 
 template <typename T>
 concept IsStdarr = requires(T t) {
-  t.max_size;
+	t.max_size;
 };
 
 template <typename T>
 concept IsStdvec2d = requires(T t) {
-  IsStdvec<T>;
-  t[0][0];
+	IsStdvec<T>;
+	t[0][0];
 };
 
-/*
 template <typename T>
 concept IsScalar = std::is_scalar_v<T>;
+
+#define KIKA_VALUE
+#else
 
 template <typename T, class = void>
 struct IsEigen : std::false_type {};
@@ -78,7 +82,9 @@ struct IsStdarr : std::false_type {};
 
 template <typename T>
 struct IsStdarr<T, std::void_t<decltype(std::declval<T>().max_size())>> : std::true_type {};
-*/
+
+#define KIKA_VALUE ::value
+#endif
 
 }
 
@@ -177,6 +183,32 @@ std::vector<I> sortedIota(const T& data) {
 	auto range = kika::util::vecrange<I>((size_t)data.size());
 	std::sort(range.begin(), range.end(), [&data](auto& l, auto& r) { return data[l] < data[r]; });
 	return range;
+}
+
+// warning: order will be changed
+// order: non-duplicated (0:n-1) indices
+template <typename T1, typename T2>
+void inplaceReorder(std::vector<T1>& vec, std::vector<T2>& order) {
+	assert(vec.size() == order.size());
+
+	for (size_t i = 0, t = 0; i < vec.size(); i++) {
+		while (i != (t = static_cast<size_t>(order[i]))) {
+			std::swap(order[i], order[t]);
+			std::swap(vec[i], vec[t]);
+		}
+	}
+}
+
+// warning: order will be changed
+// order: non-duplicated (0:n-1) indices
+template <typename T1, typename T2>
+void inplaceReorder(T1* begin, T1* end, std::vector<T2>& order) {
+	for (size_t i = 0, t = 0; begin != end; ++i, ++begin) {
+		while (i != (t = static_cast<size_t>(order[i]))) {
+			std::swap(order[i], order[t]);
+			std::swap(begin[i], begin[t]);
+		}
+	}
 }
 
 /// operation push_back as increment counter
@@ -282,6 +314,11 @@ template <typename T>
 inline T sign(const T& a) {
 	return (a>0)-(a<0);
 }
+
+inline double clamp(double v, double l, double r) {
+	return (v < l ? l : (v > r ? r : v));
+}
+
 }
 
 /// geometry processing utility
@@ -328,6 +365,16 @@ inline double angle(const Eigen::Vector3d& a, const Eigen::Vector3d& b, const Ei
 	//return sign(a.cross(b).dot(n)) * angle(a, b);
 }
 
+// solid angle between triangle and origin(0, 0, 0)
+inline double solidAngle(
+	const Eigen::Vector3d& a,
+	const Eigen::Vector3d& b,
+	const Eigen::Vector3d& c) {
+	double r0 = a.norm(), r1 = b.norm(), r2 = c.norm();
+	double d = r0 * r1 * r2 + a.dot(b)* r2 + b.dot(c)* r0 + c.dot(a)* r1;
+	return 2.0 * atan2(a.dot(b.cross(c)), d);
+}
+
 // rotate v 
 inline Eigen::Vector3d quatRot(const Eigen::Vector3d& v, const Eigen::Vector3d& axis, double angle) {
 	angle *= 0.5;
@@ -355,6 +402,204 @@ inline Eigen::Vector3d project2plane(const Eigen::Vector3d& p, const Eigen::Vect
 	return p - (point2planeDist(p, n, v)) * n;
 }
 
+// simple point to triangle signed distance
+inline double point2triangleDist(
+	const Eigen::Vector3d& p,
+	const Eigen::Vector3d& a,
+	const Eigen::Vector3d& b,
+	const Eigen::Vector3d& c,
+	const Eigen::Vector3d& n) {
+	double dist = p.dot(n) - a.dot(n);
+
+	Eigen::Vector3d proj = p - dist * n;
+	Eigen::Vector3d r0 = c - a, r1 = b - a, r2 = proj - a;
+
+	double dot00 = r0.dot(r0);
+	double dot01 = r0.dot(r1);
+	double dot02 = r0.dot(r2);
+	double dot11 = r1.dot(r1);
+	double dot12 = r1.dot(r2);
+
+	double invDenom = 1.0 / (dot00 * dot11 - dot01 * dot01);
+	double u = (dot01 * dot12 - dot11 * dot02) * invDenom;
+	double v = (dot01 * dot02 - dot00 * dot12) * invDenom;
+
+	if ((u >= 0.0) && (v >= 0.0) && (u + v <= 1.0)) {
+		return dist;
+	}
+
+	if (u < 0.) {
+		double t = clamp((proj - b).dot(c - b) / (c - b).squaredNorm(), 0., 1.);
+		return (p - t * c - (1. - t) * b).norm();
+	} else if (v < 0.) {
+		double t = clamp((proj - c).dot(-r0) / dot00, 0., 1.);
+		return (p - t * a - (1. - t) * c).norm();
+	} else {
+		double t = clamp(dot12 / dot11, 0.0, 1.0);
+		return (p - t * b - (1. - t) * a).norm();
+	}
+}
+
+// unsigned
+// https://github.com/pmjoniak/GeometricTools/blob/master/GTEngine/Include/Mathematics/GteDistPointTriangleExact.h
+inline double point2triangleDist(const Eigen::Vector3d& p,
+	const Eigen::Matrix3d& tri) {
+
+	Eigen::Vector3d diff = p - tri.row(0).transpose();
+	Eigen::Vector3d edge0 = tri.row(1) - tri.row(0);
+	Eigen::Vector3d edge1 = tri.row(2) - tri.row(0);
+	double a00 = edge0.dot(edge0);
+	double a01 = edge0.dot(edge1);
+	double a11 = edge1.dot(edge1);
+	double b0 = -diff.dot(edge0);
+	double b1 = -diff.dot(edge1);
+	double det = a00 * a11 - a01 * a01;
+	double t0 = a01 * b1 - a11 * b0;
+	double t1 = a01 * b0 - a00 * b1;
+
+	if (t0 + t1 <= det) {
+		if (t0 < 0.) {
+			if (t1 < 0.) {
+				if (b0 < 0.) {
+					t1 = 0.;
+					if (-b0 >= a00) {
+						t0 = 1.;
+					} else {
+						t0 = -b0 / a00;
+					}
+				} else {
+					t0 = 0.;
+					if (b1 >= 0.) {
+						t1 = 0.;
+					} else if (-b1 >= a11) {
+						t1 = 1.;
+					} else {
+						t1 = -b1 / a11;
+					}
+				}
+			} else {
+				t0 = 0.;
+				if (b1 >= 0.) {
+					t1 = 0.;
+				} else if (-b1 >= a11) {
+					t1 = 1.;
+				} else {
+					t1 = -b1 / a11;
+				}
+			}
+		} else if (t1 < 0.) {
+			t1 = 0.;
+			if (b0 >= 0.) {
+				t0 = 0.;
+			} else if (-b0 >= a00) {
+				t0 = 1.;
+			} else {
+				t0 = -b0 / a00;
+			}
+		} else {
+			double invDet = 1. / det;
+			t0 *= invDet;
+			t1 *= invDet;
+		}
+	} else {
+		double tmp0, tmp1, numer, denom;
+
+		if (t0 < 0.) {
+			tmp0 = a01 + b0;
+			tmp1 = a11 + b1;
+			if (tmp1 > tmp0) {
+				numer = tmp1 - tmp0;
+				denom = a00 - 2. * a01 + a11;
+				if (numer >= denom) {
+					t0 = 1.;
+					t1 = 0.;
+				} else {
+					t0 = numer / denom;
+					t1 = 1. - t0;
+				}
+			} else {
+				t0 = 0.;
+				if (tmp1 <= 0.) {
+					t1 = 1.;
+				} else if (b1 >= 0.) {
+					t1 = 0.;
+				} else {
+					t1 = -b1 / a11;
+				}
+			}
+		} else if (t1 < 0.) {
+			tmp0 = a01 + b1;
+			tmp1 = a00 + b0;
+			if (tmp1 > tmp0) {
+				numer = tmp1 - tmp0;
+				denom = a00 - 2. * a01 + a11;
+				if (numer >= denom) {
+					t1 = 1.;
+					t0 = 0.;
+				} else {
+					t1 = numer / denom;
+					t0 = 1. - t1;
+				}
+			} else {
+				t1 = 0.;
+				if (tmp1 <= 0.) {
+					t0 = 1.;
+				} else if (b0 >= 0.) {
+					t0 = 0.;
+				} else {
+					t0 = -b0 / a00;
+				}
+			}
+		} else {
+			numer = a11 + b1 - a01 - b0;
+			if (numer <= 0.) {
+				t0 = 0.;
+				t1 = 1.;
+			} else {
+				denom = a00 - 2. * a01 + a11;
+				if (numer >= denom) {
+					t0 = 1.;
+					t1 = 0.;
+				} else {
+					t0 = numer / denom;
+					t1 = 1. - t0;
+				}
+			}
+		}
+	}
+
+	Eigen::Vector3d closest = tri.row(0).transpose() + t0 * edge0 + t1 * edge1;
+	diff = p - closest;
+	return sqrt(diff.dot(diff));
+}
+
+// simple triangle-ray intersection
+inline bool rayIntersect(
+	const Eigen::Vector3d& p, const Eigen::Vector3d& d,
+	const Eigen::Vector3d& a, const Eigen::Vector3d& b, const Eigen::Vector3d& c, const Eigen::Vector3d& n) {
+
+	double dotND = n.dot(d);
+	if (fabs(dotND) < 1e-8) return false;
+
+	double dotNA = -n.dot(a);
+
+	double t = -(n.dot(p) + dotNA) / dotND;
+	if (t < 0.) return false;
+
+	Eigen::Vector3d q = p + t * d;
+
+	Eigen::Vector3d eq = (b - a).cross(q - a);
+	if (n.dot(eq) < 0.0) return false;
+
+	eq = (c - b).cross(q - b);
+	if (n.dot(eq) < 0.0) return false;
+
+	eq = (a - c).cross(q - c);
+	if (n.dot(eq) < 0.0) return false;
+
+	return true;
+}
+
 // compute an arbitary tangent basis
 inline std::pair<Eigen::Vector3d, Eigen::Vector3d> tangentBasis(const Eigen::Vector3d& n) {
 	Eigen::Vector3d v = Eigen::Vector3d::UnitX();
@@ -364,6 +609,127 @@ inline std::pair<Eigen::Vector3d, Eigen::Vector3d> tangentBasis(const Eigen::Vec
 	Eigen::Vector3d t2 = n.cross(t1);
 	return std::make_pair(t1, t2);
 }
+
+// compute any orthogonal vector of vec (branchless version)
+inline Eigen::Vector3d orthogonal(const Eigen::Vector3d& vec) {
+	return Eigen::Vector3d(
+		std::copysign(vec[2], vec[0]),
+		std::copysign(vec[2], vec[1]),
+		-std::copysign(fabs(vec[0]) + fabs(vec[1]), vec[2]));
+}
+
+// branchless version
+inline std::pair<Eigen::Vector3d, Eigen::Vector3d> orthogonals(const Eigen::Vector3d& vec) {
+	double sign = std::copysign(1., vec[2]);
+	double a = -1. / (sign + vec[2]);
+	double b = vec[0] * vec[1] * a;
+	return std::make_pair(
+		Eigen::Vector3d(1. + sign * vec[0] * vec[0] * a, sign * b, -sign * vec[0]),
+		Eigen::Vector3d(b, sign + vec[1] * vec[1] * a, -vec[1])
+	);
+}
+
+template <typename FaceType>
+class MeshDuplicateRemover {
+	std::vector<uint32_t> reduceIds;
+	std::vector<uint32_t> replace;
+
+	using EdgeKey = std::pair<uint32_t, uint32_t>;
+	struct EdgeKeyHash {
+		uint64_t operator()(const EdgeKey& p) const {
+			return static_cast<uint64_t>(p.first) << 32 | p.second;
+		}
+	};
+
+	template <typename T>
+	inline std::vector<uint32_t> rmConsecutiveDuplicates(const T& vec, const bool isRing = true) {
+		std::vector<uint32_t> ret;
+
+		if (vec.empty()) return ret;
+
+		ret.emplace_back(vec[0]);
+
+		for (size_t i = 1; i < vec.size(); i++) {
+			if (vec[i] == vec[i - 1]) continue;
+			if (isRing && (vec[(i+1)%vec.size()] == vec[i])) continue;
+
+			ret.emplace_back(static_cast<uint32_t>(vec[i]));
+		}
+
+		return ret;
+	}
+
+	template <typename T>
+	void createReplaceMap(const Eigen::MatrixX3d& pos, const std::vector<T>& faces) {
+		uint32_t n = (uint32_t)pos.rows();
+
+		std::vector<bool> checked(n, false);
+		reduceIds.reserve(n);
+		replace.resize(n);
+		std::iota(replace.begin(), replace.end(), 0);
+
+		for (uint32_t i = 0, c = 0; i < n; i++) {
+			if (checked[i]) continue;
+			replace[i] = c;
+			reduceIds.emplace_back(i);
+			checked[i] = true;
+
+			for (uint32_t j = i+1; j < n; j++) {
+				if (checked[j]) continue;
+				if ((pos.row(i) - pos.row(j)).squaredNorm() < 1e-20) {
+					replace[j] = replace[i];
+					checked[j] = true;
+				}
+			}
+
+			c++;
+		}
+	}
+
+	void createRemovedFaces(const FaceType& faces) {
+		std::vector<std::vector<uint32_t>> tmpFaces;
+		tmpFaces.reserve(faces.size());
+
+		for (size_t i = 0; i < faces.size(); i++) {
+			auto fi = faces[i];
+			for (auto& f : fi) f = replace[f];
+			auto dfi = rmConsecutiveDuplicates(fi);
+
+			if (dfi.size() < 3) continue;
+			tmpFaces.emplace_back(dfi);
+		}
+
+		std::unordered_set<EdgeKey, EdgeKeyHash> checkNonmanifolds;
+		rmFaces.reserve(faces.size());
+
+		for (size_t i = 0; i < tmpFaces.size(); i++) {
+			bool ok = true;
+			for (size_t j = 0, k = tmpFaces[i].size(); j < k; j++) {
+				auto q = std::make_pair(tmpFaces[i][j], tmpFaces[i][(j+1)%k]);
+				auto find = checkNonmanifolds.find(q);
+				if (find == checkNonmanifolds.end()) {
+					checkNonmanifolds.emplace(q);
+				} else {
+					ok = false;
+					break;
+				}
+			}
+			if (ok) rmFaces.emplace_back(tmpFaces[i]);
+		}
+	}
+
+public:
+
+	Eigen::MatrixX3d rmPos;
+	std::vector<std::vector<uint32_t>> rmFaces;
+
+	MeshDuplicateRemover(const Eigen::MatrixX3d& pos, const FaceType& faces) {
+		createReplaceMap(pos, faces);
+		createRemovedFaces(faces);
+		rmPos = pos(reduceIds, Eigen::all);
+	}
+
+};
 
 #endif
 }
@@ -616,17 +982,17 @@ struct Timer {
 	std::string str;
 	bool printStatus;
 
-	Timer(std::string_view str="") : start(std::chrono::high_resolution_clock::now()), str(str), printStatus(true) {}
+	Timer(std::string_view str="") : start(std::chrono::steady_clock::now()), str(str), printStatus(true) {}
 
 	void restart(std::string_view str="") {
 		if (str.size()) this->str = str;
 		printStatus = true;
-		start = std::chrono::high_resolution_clock::now();
+		start = std::chrono::steady_clock::now();
 	}
 
 	void end() {
 		if (printStatus)
-			std::cout << str << std::chrono::duration_cast<Dur>(std::chrono::high_resolution_clock::now() - start) << std::endl;
+			std::cout << str << std::chrono::duration_cast<Dur>(std::chrono::steady_clock::now() - start) << std::endl;
 		printStatus = false;
 	}
 

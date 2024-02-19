@@ -1,9 +1,13 @@
 #pragma once
 
 #include <string>
+#include <fstream>
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+
+// template <typename Derived1, typename Derived2, typename Scalar = typename Derived2::Scalar,
+// 	int Rows = Derived2::RowsAtCompileTime, int Cols = Derived2::ColsAtCompileTime>
 
 /// 
 /// basic utility
@@ -132,7 +136,8 @@ Eigen::VectorXd invCircuitMat(const I n) {
 
 
 // a.k.a cross product matrix
-// e.cross(n) == e * skewSymMat(n).T
+// - e.cross(n) == skewSymMat(n) * e
+// e.cross(n) == skewSymMat(n).T * e
 template <typename T = double>
 Eigen::Matrix3<T> skewSymMat(const Eigen::Vector3<T>& v) {
 	Eigen::Matrix3<T> mat;
@@ -263,6 +268,22 @@ Eigen::SparseMatrix<double> spsub(const Eigen::SparseMatrix<double>& mat, const 
 	return ext.transpose() * mat * ext;
 }
 
+// extruct sub-matrix from mat by rows and cols
+template <typename T1 = int, typename T2 = int>
+Eigen::SparseMatrix<double> spsub(const Eigen::SparseMatrix<double>& mat, const std::vector<T1>& rows, const std::vector<T2>& cols) {
+	Eigen::SparseMatrix<double> left(rows.size(), mat.rows()), right(mat.cols(), cols.size());
+	std::vector<Eigen::Triplet<double>> triplsLeft, triplsRight;
+	triplsLeft.reserve(rows.size());
+	triplsRight.reserve(cols.size());
+	for (size_t i = 0; i < rows.size(); i++) triplsLeft.emplace_back((int)i, (int)rows[i], 1.0);
+	for (size_t i = 0; i < cols.size(); i++) triplsRight.emplace_back((int)cols[i], (int)i, 1.0);
+
+	left.setFromTriplets(triplsLeft.begin(), triplsLeft.end());
+	right.setFromTriplets(triplsRight.begin(), triplsRight.end());
+
+	return left * mat * right;
+}
+
 // extruct sub-matrix from mat by idx (complement of row and column)
 template <typename T = int>
 Eigen::SparseMatrix<double> spcosub(const Eigen::SparseMatrix<double>& mat, const std::vector<T>& idx) {
@@ -350,6 +371,82 @@ inline Eigen::SparseMatrix<T> sumNormalized(const Eigen::SparseMatrix<T>& mat, c
 		return (mat * Eigen::VectorXd::Ones(mat.cols())).cwiseInverse().asDiagonal() * mat;
 	else
 		return mat * (Eigen::RowVectorXd::Ones(mat.rows()) * mat).cwiseInverse().asDiagonal();
+}
+
+/// @param offset : start index offset
+/// @param outerLast : do outer.emplace_back(nnz);
+/// @return outer (size of rows), inner (size of nnz), nnz (size of nnz)
+template <typename Derived, typename I = Derived::StorageIndex, typename T = typename Derived::Scalar>
+std::tuple<std::vector<I>, std::vector<I>, std::vector<T>>
+getCsrDataFromSparseMat(const Eigen::SparseCompressedBase<Derived>& A, const size_t offset = 0, const bool outerLast = false) {
+	std::vector<I> outer{ A.outerIndexPtr(), A.outerIndexPtr() + A.rows() };
+	std::vector<I> inner{ A.innerIndexPtr(), A.innerIndexPtr() + A.nonZeros() };
+	std::vector<T> value{ A.valuePtr(), A.valuePtr() + A.nonZeros() };
+
+	if (outerLast) outer.emplace_back(value.size());
+	return std::make_tuple(std::move(outer), std::move(inner), std::move(value));
+}
+
+/// @param offset : start index offset
+/// @param outerLast : do outer.emplace_back(nnz);
+/// @return outer, inner, nnz
+template <typename Derived, typename I = Derived::StorageIndex, typename T = typename Derived::Scalar>
+std::tuple<std::vector<I>, std::vector<I>, std::vector<T>>
+getCsrDataFromSparseMatUpper(const Eigen::SparseCompressedBase<Derived>& A, const size_t offset = 0, const bool outerLast = false) {
+	std::vector<I> outer, inner;
+	std::vector<T> value;
+	auto nnz = A.nonZeros();
+	outer.reserve(A.rows());
+	inner.reserve(nnz);
+	value.reserve(nnz);
+
+	Eigen::Index stride = 0;
+	for (Eigen::Index k = 0; k < A.outerSize(); k++) {
+		Eigen::Index s = stride;
+		outer.emplace_back(static_cast<I>(s + offset));
+
+		for (typename Eigen::SparseMatrix<T>::InnerIterator it(A, k); it; ++it) {
+			if (it.row() > it.col()) continue;
+
+			inner.emplace_back(static_cast<I>(it.row() + offset));
+			value.emplace_back(it.value());
+			stride++;
+		}
+	}
+
+	if (outerLast) outer.emplace_back(value.size());
+	return std::make_tuple(std::move(outer), std::move(inner), std::move(value));
+}
+
+/// @param offset : start index offset
+/// @param outerLast : do outer.emplace_back(nnz);
+/// @return outer, inner, nnz
+template <typename Derived, typename I = Derived::StorageIndex, typename T = typename Derived::Scalar>
+std::tuple<std::vector<I>, std::vector<I>, std::vector<T>>
+getCsrDataFromSparseMatLower(const Eigen::SparseCompressedBase<Derived>& A, const size_t offset = 0, const bool outerLast = false) {
+	std::vector<I> outer, inner;
+	std::vector<T> value;
+	auto nnz = A.nonZeros();
+	outer.reserve(A.rows());
+	inner.reserve(nnz);
+	value.reserve(nnz);
+
+	Eigen::Index stride = 0;
+	for (Eigen::Index k = 0; k < A.outerSize(); k++) {
+		Eigen::Index s = stride;
+		outer.emplace_back(static_cast<I>(s + offset));
+
+		for (typename Eigen::SparseMatrix<T>::InnerIterator it(A, k); it; ++it) {
+			if (it.col() > it.row()) continue;
+
+			inner.emplace_back(static_cast<I>(it.row() + offset));
+			value.emplace_back(it.value());
+			stride++;
+		}
+	}
+
+	if (outerLast) outer.emplace_back(value.size());
+	return std::make_tuple(std::move(outer), std::move(inner), std::move(value));
 }
 
 /// @param offset : start index offset
@@ -724,6 +821,8 @@ public:
 };
 
 }
+
+#include <filesystem>
 
 namespace kika::eig {
 inline void showMatrix(const Eigen::MatrixXd& mat) {

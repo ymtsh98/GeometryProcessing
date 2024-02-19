@@ -63,7 +63,7 @@ protected:
 		const Params& params;
 
 		Generator(const Params& params) : params(params) {}
-
+		
 	public:
 		virtual Idx size() const = 0;
 
@@ -83,6 +83,7 @@ public:
 	using index_type = Idx;
 
 	Shape() {}
+	virtual ~Shape() {}
 
 	virtual std::vector<std::vector<Idx>> poly() const = 0;
 

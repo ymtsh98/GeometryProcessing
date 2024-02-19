@@ -245,13 +245,13 @@ public:
 	size_t vwrite(const T& vertices) {
 		size_t n = 0;
 
-		if constexpr (util::IsEigen<T>) {
+		if constexpr (util::IsEigen<T>KIKA_VALUE) {
 			n = (size_t)vertices.rows();
 			wr.reserve(wr.size() + n * 30);
 			for (size_t i = 0; i < n; i++) {
 				wr += std::string("v " + std::to_string(vertices(i, 0)) + " " + std::to_string(vertices(i, 1)) + " " + std::to_string(vertices(i, 2)) + "\n");
 			}
-		} else if constexpr (util::IsStdvec2d<T>) {
+		} else if constexpr (util::IsStdvec2d<T>KIKA_VALUE) {
 			n = vertices.size();
 			wr.reserve(wr.size() + n * 30);
 			for (size_t i = 0; i < n; i++) {
@@ -270,12 +270,12 @@ public:
 
 	template<typename T = std::vector<uint32_t>>
 	void fwrite(const T& faces, const size_t addOffset = 0) {
-		if constexpr (util::IsEigen<T>) {
+		if constexpr (util::IsEigen<T> KIKA_VALUE) {
 			wr.reserve(wr.size() + faces.rows() * 30);
 			for (int i = 0; i < faces.rows(); i++) {
 				wr += std::string("f " + std::to_string(faces(i, 0)+offset) + " " + std::to_string(faces(i, 1)+offset) + " " + std::to_string(faces(i, 2)+offset) + "\n");
 			}
-		} else if constexpr (util::IsStdvec2d<T>) {
+		} else if constexpr (util::IsStdvec2d<T> KIKA_VALUE) {
 			wr.reserve(wr.size() + faces.size() * 30);
 			for (size_t i = 0; i < faces.size(); i++) {
 				wr += "f ";

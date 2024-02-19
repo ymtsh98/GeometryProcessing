@@ -1,10 +1,110 @@
 #pragma once
 #include <kika/surface_mesh.hpp>
 #include <kika/eigutil.hpp>
-#include <Eigen/Sparse>
-
 
 namespace kika::diff {
+
+// 
+// FwDeltaOperator delOp;
+// delOp.compute(mesh);
+// 
+// auto gradf = delOp(source);
+// auto divf  = delOp * gradf;
+// auto curlf = delOp ^ gradf;
+// divf  = delOp * curlf == [0];
+class FwDeltaOperator {
+	using SparseMatrices3d = std::array<Eigen::SparseMatrix<double>, 3>;
+
+	SparseMatrices3d del; // |F|x|V|x3 delta operator
+	Eigen::MatrixX3d fns; // face unit normal
+	// SparseMatrixces3d fes; // |F|x|V| inner edges, del = fns.diag.3d x fes
+	// - fes(scalar_func) -> rot 90 deg of gradient
+
+	Eigen::VectorXd fareas;
+
+public:
+
+	FwDeltaOperator() {}
+
+	void reset() {
+		for (int i = 0; i < 3; i++) del[i].resize(0, 0);
+		fns.resize(0, 0);
+		fareas.resize(0);
+	}
+
+	Eigen::SparseMatrix<double>& operator[](int i) {
+		assert(i < 3 && "FwDeltaOperator");
+		return del[i];
+	}
+
+	void compute(const kika::heds::SurfaceMesh& mesh) {
+		size_t nv = mesh.getNumVerts(), nf = mesh.getNumFaces();
+
+		fns.resize(nf, 3);
+		fareas = Eigen::VectorXd::Zero(nf);
+
+		std::array<std::vector<Eigen::Triplet<double>>, 3> tripls;
+		for (int i = 0; i < 3; i++) tripls[i].reserve(nf * 4);
+
+		for (size_t i = 0; i < nf; i++) {
+			auto normal = mesh.normal(mesh.faces[i]);
+			fareas[i] = normal.norm();
+			normal.array() /= fareas[i]; // normalize
+			fns.row(i) = normal;
+			normal.array() /= fareas[i]; // divided by area
+
+			auto&& vidx = mesh.faces[i]->circuitVerts();
+			for (size_t j = 0, k = vidx.size(); j < k; j++) {
+				Eigen::Vector3d e = normal.cross(mesh.pos.row(vidx[(j+2)%k]) - mesh.pos.row(vidx[(j+1)%k]));
+				for (int r = 0; r < 3; r++) tripls[r].emplace_back((int)i, (int)vidx[j], e(r));
+			}
+		}
+
+		for (int i = 0; i < 3; i++) {
+			del[i].resize(nf, nv);
+			del[i].setFromTriplets(tripls[i].begin(), tripls[i].end());
+		}
+	}
+
+	// gradient
+	inline Eigen::MatrixX3d operator()(const Eigen::VectorXd& v) const {
+		Eigen::MatrixX3d ret(del[0].rows(), 3);
+		for (int i = 0; i < 3; i++)
+			ret.col(i) = del[i] * v;
+		return ret;
+	}
+
+	// curl
+	inline Eigen::MatrixX3d operator^(const Eigen::VectorXd& v) const {
+		return this->operator^(this->operator()(v));
+	}
+
+	// curl
+	inline Eigen::MatrixX3d operator^(const Eigen::MatrixX3d& m) const {
+		Eigen::MatrixX3d ret(del[0].rows(), 3);
+
+		ret.col(0) = fns.col(1).asDiagonal() * m.col(2) - fns.col(2).asDiagonal() * m.col(1);
+		ret.col(1) = fns.col(2).asDiagonal() * m.col(0) - fns.col(0).asDiagonal() * m.col(2);
+		ret.col(2) = fns.col(0).asDiagonal() * m.col(1) - fns.col(1).asDiagonal() * m.col(0);
+
+		return ret;
+	}
+
+	// delta * delta (divergence * gradient)
+	inline Eigen::SparseMatrix<double> operator*(const FwDeltaOperator& other) const {
+		return (del[0].transpose() * fareas.asDiagonal() * other.del[0]
+			+ del[1].transpose() * fareas.asDiagonal() * other.del[1]
+			+ del[2].transpose() * fareas.asDiagonal() * other.del[2]);
+	}
+
+	// divergence
+	inline Eigen::VectorXd operator*(const Eigen::MatrixX3d& m) const {
+		return (del[0].transpose() * fareas.asDiagonal() * m.col(0)
+			+ del[1].transpose() * fareas.asDiagonal() * m.col(1)
+			+ del[2].transpose() * fareas.asDiagonal() * m.col(2));
+	}
+
+};
 
 class SparseMatrices3d {
 	std::array<Eigen::SparseMatrix<double>, 3> mat;
@@ -19,10 +119,6 @@ public:
 		return mat[i];
 	}
 
-	Eigen::SparseMatrix<double> operator*(const SparseMatrices3d& other) const {
-		return (mat[0] * other.mat[0] + mat[1] * other.mat[1] + mat[2] * other.mat[2]);
-	}
-
 	// for gradient
 	Eigen::MatrixX3d operator*(const Eigen::VectorXd& v) const {
 		Eigen::MatrixX3d ret(mat[0].rows(), 3);
@@ -31,17 +127,22 @@ public:
 		return ret;
 	}
 
-	// for divergence
-	Eigen::VectorXd operator*(const Eigen::MatrixX3d& m) const {
-		return (mat[0] * m.col(0) + mat[1] * m.col(1) + mat[2] * m.col(2));
-	}
-
 	// for curl
 	Eigen::MatrixX3d operator^(const Eigen::MatrixX3d& m) const {
 		Eigen::MatrixX3d ret(mat[0].rows(), 3);
 		for (int i = 0; i < 3; i++)
 			ret.col(i) = mat[(i + 1) % 3] * m.col((i + 2) % 3) - mat[(i + 2) % 3] * m.col((i + 1) % 3);
 		return ret;
+	}
+
+	// for divergence
+	Eigen::SparseMatrix<double> operator*(const SparseMatrices3d& other) const {
+		return (mat[0] * other.mat[0] + mat[1] * other.mat[1] + mat[2] * other.mat[2]);
+	}
+
+	// for divergence
+	Eigen::VectorXd operator*(const Eigen::MatrixX3d& m) const {
+		return (mat[0] * m.col(0) + mat[1] * m.col(1) + mat[2] * m.col(2));
 	}
 };
 
@@ -54,23 +155,34 @@ protected:
 	const heds::SurfaceMesh* mesh;
 public:
 
+	mutable Eigen::SparseMatrix<double> lap; // vertex-wise laplace-beltrami operator (stiffness term)
+
+	mutable SparseMatrices3d grad; // |F|x|V| gradient operator
+	mutable SparseMatrices3d div;  // |V|x|F| divergence operator
+	mutable SparseMatrices3d curl; // |F|x|F| curl operator
+
+	mutable Eigen::VectorXd hstar0; // 0-form hodge star : prim vert <-> dual face
+	mutable Eigen::VectorXd hstar1; // 1-form hodge star : prim edge <-> dual edge
+	mutable Eigen::VectorXd hstar2; // 2-form hodge star : prim face <-> dual vert
+
+	mutable Eigen::SparseMatrix<double> ederiv0; // 0-form exterior derivative : |E|x|V|
+	mutable Eigen::SparseMatrix<double> ederiv1; // 1-form exterior derivative : |F|x|E|
+
+	mutable Eigen::SparseMatrix<Eigen::dcomplex> clap; // vertex-wise connection laplacian
+
+	// grad : d0, del()
+	// curl : (s2) * d1, del ^
+	// div  : (s0^-1) * d0.T * s1, del * 
+
+	//// test : curl of gradient = 0 : d1 * d0 * vwise_func;
+	// Eigen::MatrixX3d grad_pos = (d0 * mesh.pos);
+	// Eigen::MatrixX3d curl_grad_pos = d1 * grad_pos; // [[0 0 0] ... [0 0 0]]
+
 	DiscreteLaplacian() : mesh(nullptr) {}
 
 	DiscreteLaplacian(const heds::SurfaceMesh& mesh) : mesh(&mesh) {}
 
-	mutable Eigen::SparseMatrix<double> lbo; // vertex-wise laplace-beltrami operator
-
-	mutable SparseMatrices3d grad; // |F|x|V| gradient operator
-	mutable SparseMatrices3d div;  // |V|x|F| divergence operator
-
-	mutable Eigen::VectorXd s0; // 0-form hodge star : prim vert <-> dual face
-	mutable Eigen::VectorXd s1; // 1-form hodge star : prim edge <-> dual edge
-	mutable Eigen::VectorXd s2; // 2-form hodge star : prim face <-> dual vert
-
-	mutable Eigen::SparseMatrix<double> d0; // 0-form exterior derivative : E x V
-	mutable Eigen::SparseMatrix<double> d1; // 1-form exteriro derivative : F x E
-
-	mutable Eigen::SparseMatrix<Eigen::dcomplex> clbo; // vertex-wise connection laplacian
+	virtual ~DiscreteLaplacian() {}
 
 	void build(const heds::SurfaceMesh& mesh) {
 		this->mesh = &mesh;
@@ -78,19 +190,21 @@ public:
 	}
 
 	void reset() {
-		lbo.resize(0, 0);
+		lap.resize(0, 0);
 		grad.resize(0, 0);
 		div.resize(0, 0);
-		s0.resize(0);
-		s1.resize(0);
-		s2.resize(0);
-		d0.resize(0, 0);
-		d1.resize(0, 0);
+		curl.resize(0, 0);
+
+		hstar0.resize(0);
+		hstar1.resize(0);
+		hstar2.resize(0);
+		ederiv0.resize(0, 0);
+		ederiv1.resize(0, 0);
 	}
 
 	// vertex-wise laplacian for triangle mesh
 	virtual const Eigen::SparseMatrix<double>& laplacianOp() const {
-		if (lbo.size() != 0) return lbo;
+		if (lap.size() != 0) return lap;
 
 		auto [nv, ne, nf] = mesh->vef();
 
@@ -122,10 +236,10 @@ public:
 			triplets.emplace_back(v0, v2, -w0);
 		}
 
-		lbo.resize(nv, nv);
-		lbo.setFromTriplets(triplets.begin(), triplets.end());
+		lap.resize(nv, nv);
+		lap.setFromTriplets(triplets.begin(), triplets.end());
 
-		return lbo;
+		return lap;
 	}
 
 	// gradient operator
@@ -141,15 +255,9 @@ public:
 			normal.array() /= normal.squaredNorm();
 
 			auto&& vidx = mesh->faces[i]->circuitVerts();
-			size_t t = vidx.size();
-
-			//Eigen::MatrixX3d G(t, 3);
-			for (size_t j = 0; j < t; j++) {
-				//G.row(j) 
-				Eigen::Vector3d g = normal.cross(mesh->pos.row(vidx[(j+2)%t]) - mesh->pos.row(vidx[(j+1)%t]));
-				for (size_t k = 0; k < 3; k++) {
-					triplets[k].emplace_back((int)i, (int)vidx[j], g(k));
-				}
+			for (size_t j = 0, k = vidx.size(); j < k; j++) {
+				Eigen::Vector3d e = normal.cross(mesh->pos.row(vidx[(j+2)%k]) - mesh->pos.row(vidx[(j+1)%k]));
+				for (int r = 0; r < 3; r++) triplets[r].emplace_back((int)i, (int)vidx[j], e(r));
 			}
 		}
 
@@ -166,18 +274,40 @@ public:
 		if (div[0].size() != 0) return div;
 
 		if (grad[0].rows() == 0) gradientOp();
-		Eigen::VectorXd areas = faceAreas();
+		Eigen::VectorXd areas = mesh->faceAreas();
 
 		for (int i = 0; i < 3; i++)
 			div[i] = grad[i].transpose() * areas.asDiagonal();
 		return div;
 	}
 
+	// curl operator
+	virtual const SparseMatrices3d& curlOp() const {
+		if (curl[0].rows() != 0) return curl;
+
+		size_t nf = mesh->getNumFaces();
+		std::array<std::vector<Eigen::Triplet<double>>, 3> triplets;
+		for (int i = 0; i < 3; i++) triplets[i].reserve(nf);
+
+		for (size_t i = 0; i < nf; i++) {
+			auto normal = mesh->normal(mesh->faces[i]);
+			normal.normalize();
+			for (int j = 0; j < 3; j++) triplets[j].emplace_back((int)i, (int)i, normal[j]);
+		}
+
+		for (int i = 0; i < 3; i++) {
+			curl[i].resize(nf, nf);
+			curl[i].setFromTriplets(triplets[i].begin(), triplets[i].end());
+		}
+
+		return curl;
+	}
+
 	// barycentric areas (0-form hodge star)
 	virtual const Eigen::VectorXd& barycentricAreas() const {
-		if (s0.size() != 0) return s0;
+		if (hstar0.size() != 0) return hstar0;
 
-		s0 = Eigen::VectorXd::Zero(mesh->getNumVerts());
+		hstar0 = Eigen::VectorXd::Zero(mesh->getNumVerts());
 
 		for (size_t i = 0; i < mesh->getNumFaces(); i++) {
 			auto&& vidx = mesh->faces[i]->circuitVerts();
@@ -185,18 +315,18 @@ public:
 
 			area /= (double)vidx.size();
 			for (const auto& v : vidx) {
-				s0[v] += area;
+				hstar0[v] += area;
 			}
 		}
 
-		return s0;
+		return hstar0;
 	}
 
 	// voronoi areas for triangle mesh (0-form hodge star)
 	virtual const Eigen::VectorXd& voronoiAreas() const {
-		if (s0.size() != 0) return s0;
+		if (hstar0.size() != 0) return hstar0;
 
-		s0 = Eigen::VectorXd::Zero(mesh->getNumVerts());
+		hstar0 = Eigen::VectorXd::Zero(mesh->getNumVerts());
 
 		for (size_t i = 0; i < mesh->getNumFaces(); i++) {
 			double area = mesh->area(mesh->faces[i]);
@@ -210,15 +340,15 @@ public:
 			bool isObtuse = (a2 + b2 + c2) < (2 * std::max({ a2, b2, c2 }));
 			double cot0 = mesh->cot(e0), cot1 = mesh->cot(e1), cot2 = mesh->cot(e2);
 
-			s0[e0->vert->id] += isObtuse ? (mesh->dot(e0->pair, e1) < 0.0 ? area * 0.5 : area * 0.25) :
+			hstar0[e0->vert->id] += isObtuse ? (mesh->dot(e0->pair, e1) < 0.0 ? area * 0.5 : area * 0.25) :
 				(a2 * cot0 + b2 * cot1) * 0.125;
-			s0[e1->vert->id] += isObtuse ? (mesh->dot(e1->pair, e2) < 0.0 ? area * 0.5 : area * 0.25) :
+			hstar0[e1->vert->id] += isObtuse ? (mesh->dot(e1->pair, e2) < 0.0 ? area * 0.5 : area * 0.25) :
 				(b2 * cot1 + c2 * cot2) * 0.125;
-			s0[e2->vert->id] += isObtuse ? (mesh->dot(e2->pair, e0) < 0.0 ? area * 0.5 : area * 0.25) :
+			hstar0[e2->vert->id] += isObtuse ? (mesh->dot(e2->pair, e0) < 0.0 ? area * 0.5 : area * 0.25) :
 				(c2 * cot2 + a2 * cot0) * 0.125;
 		}
 
-		return s0;
+		return hstar0;
 	}
 
 	// vertex mass vector (0-form hodge star)
@@ -228,44 +358,35 @@ public:
 
 	// cotangent weights (1-form hodge star)
 	virtual const Eigen::VectorXd& cotanWeights() const {
-		if (s1.size() != 0) return s1;
+		if (hstar1.size() != 0) return hstar1;
 
-		s1.resize(mesh->getNumEdges());
+		hstar1.resize(mesh->getNumEdges());
 
 		for (size_t i = 0; i < mesh->getNumEdges(); i++) {
 			auto& edge = mesh->edges[i];
 			double a = mesh->cot(edge);
 			double b = edge->pair->face == nullptr ? 0.0 : mesh->cot(edge->pair);
-			s1[i] = 0.5 * (a + b);
+			hstar1[i] = 0.5 * (a + b);
 		}
 
-		return s1;
-	}
-
-	// face areas
-	virtual const Eigen::VectorXd faceAreas() const {
-		Eigen::VectorXd areas(mesh->getNumFaces());
-		for (size_t i = 0; i < (size_t)areas.rows(); i++) {
-			areas[i] = mesh->area(mesh->faces[i]);
-		}
-		return areas;
+		return hstar1;
 	}
 
 	// inverse of face areas (2-form hodge star)
 	virtual const Eigen::VectorXd& invFaceAreas() const {
-		if (s2.size() != 0) return s2;
-		s2.resize(mesh->getNumFaces());
+		if (hstar2.size() != 0) return hstar2;
+		hstar2.resize(mesh->getNumFaces());
 
 		for (size_t i = 0; i < mesh->getNumFaces(); i++) {
-			s2[i] = 1.0 / mesh->area(mesh->faces[i]);
+			hstar2[i] = 1.0 / mesh->area(mesh->faces[i]);
 		}
 
-		return s2;
+		return hstar2;
 	}
 
 	// vert to edge operator (0-form exterior derivative)
 	virtual const Eigen::SparseMatrix<double>& verts2edgesOp() const {
-		if (d0.size() != 0) return d0;
+		if (ederiv0.size() != 0) return ederiv0;
 		size_t nv = mesh->getNumVerts(), ne = mesh->getNumEdges();
 
 		std::vector<Eigen::Triplet<double>> triplets;
@@ -277,15 +398,15 @@ public:
 			triplets.emplace_back(i, (int)edge->vert->id, 1.0);
 		}
 
-		d0.resize(ne, nv);
-		d0.setFromTriplets(triplets.begin(), triplets.end());
+		ederiv0.resize(ne, nv);
+		ederiv0.setFromTriplets(triplets.begin(), triplets.end());
 
-		return d0;
+		return ederiv0;
 	}
 
 	// edge to face operator (1-form exterior derivative)
 	virtual const Eigen::SparseMatrix<double>& edges2facesOp() const {
-		if (d1.size() != 0) return d1;
+		if (ederiv1.size() != 0) return ederiv1;
 		size_t ne = mesh->getNumEdges(), nf = mesh->getNumFaces();
 		std::vector<Eigen::Triplet<double>> triplets;
 		triplets.reserve(nf * 3);
@@ -298,9 +419,9 @@ public:
 			} while (e != e0);
 		}
 
-		d1.resize(nf, ne);
-		d1.setFromTriplets(triplets.begin(), triplets.end());
-		return d1;
+		ederiv1.resize(nf, ne);
+		ederiv1.setFromTriplets(triplets.begin(), triplets.end());
+		return ederiv1;
 	}
 
 	// normalized surface gradient
@@ -369,7 +490,7 @@ public:
 
 	// vertex-wise connection laplacian for triangle mesh
 	virtual const Eigen::SparseMatrix<Eigen::dcomplex>& connectionLaplacianOp() const {
-		if (clbo.size() != 0) return clbo;
+		if (clap.size() != 0) return clap;
 
 		auto phi = oneringEdges();
 
@@ -405,9 +526,9 @@ public:
 			triplets.emplace_back(v0, v2, -w0 * r02);
 		}
 
-		clbo.resize(mesh->getNumVerts(), mesh->getNumVerts());
-		clbo.setFromTriplets(triplets.begin(), triplets.end());
-		return clbo;
+		clap.resize(mesh->getNumVerts(), mesh->getNumVerts());
+		clap.setFromTriplets(triplets.begin(), triplets.end());
+		return clap;
 	}
 
 };
@@ -419,12 +540,12 @@ namespace kika::diff {
 /// @brief Discrete Differential Operators on Polygonal Meshes. [Goes D. F., et al. 2020].
 class PixarPolyLaplacian : public DiscreteLaplacian {
 	// disable
-	const Eigen::VectorXd& voronoiAreas() const final { assert(!"Function Disabled"); return s0; }
+	const Eigen::VectorXd& voronoiAreas() const final { assert(!"Function Disabled"); return hstar0; }
 
 	double lambda;
 
 public:
-	mutable std::vector<Eigen::MatrixXd> weakLbo; // face-wise laplace-beltrami operator
+	mutable std::vector<Eigen::MatrixXd> wlap; // face-wise laplace-bertrami operator (stiffness term)
 
 	PixarPolyLaplacian(const double lambda = 1.0) : DiscreteLaplacian(), lambda(lambda) {}
 
@@ -436,15 +557,15 @@ public:
 	}
 
 	void reset() {
-		weakLbo.resize(0);
+		wlap.resize(0);
 		DiscreteLaplacian::reset();
 	}
 
-	const std::vector<Eigen::MatrixXd>& weakLaplacianOp() const {
-		if (weakLbo.size() != 0) return weakLbo;
+	const std::vector<Eigen::MatrixXd>& wlaplacianOp() const {
+		if (wlap.size() != 0) return wlap;
 
 		size_t nf = mesh->getNumFaces();
-		weakLbo.resize(nf);
+		wlap.resize(nf);
 		
 		auto& pos = mesh->pos;
 
@@ -462,15 +583,15 @@ public:
 			Eigen::MatrixX3d V = E * (Eigen::Matrix3d::Identity() - normal * normal.transpose());
 			Eigen::MatrixXd P = Eigen::MatrixXd::Identity(X.rows(), X.rows()) - V * U;
 			Eigen::MatrixXd M = area * U.transpose() * U + lambda * P.transpose() * P;
-			weakLbo[i] = D.transpose() * M * D;
+			wlap[i] = D.transpose() * M * D;
 		}
 
-		return weakLbo;
+		return wlap;
 	}
 
 	const Eigen::SparseMatrix<double>& laplacianOp() const final {
-		if (lbo.size() != 0) return lbo;
-		if (weakLbo.size() == 0) weakLaplacianOp();
+		if (lap.size() != 0) return lap;
+		if (wlap.size() == 0) wlaplacianOp();
 
 		size_t nv = mesh->getNumVerts();
 		
@@ -481,14 +602,14 @@ public:
 			auto&& vidx = mesh->faces[i]->circuitVerts();
 			for (size_t j = 0; j < vidx.size(); j++) {
 				for (size_t k = 0; k < vidx.size(); k++) {
-					triplets.emplace_back((int)vidx[k], (int)vidx[j], weakLbo[i](k, j));
+					triplets.emplace_back((int)vidx[k], (int)vidx[j], wlap[i](k, j));
 				}
 			}
 		}
 
-		lbo.resize(nv, nv);
-		lbo.setFromTriplets(triplets.begin(), triplets.end());
-		return lbo;
+		lap.resize(nv, nv);
+		lap.setFromTriplets(triplets.begin(), triplets.end());
+		return lap;
 
 		#if false
 		//// prepare face to vertex matrix version
@@ -504,13 +625,13 @@ public:
 		//	auto&& vidx = f->circuitVerts();
 		//
 		//	for (size_t t = 0; t < vidx.size(); t++) {
-		//		//for (size_t r = 0; r < vidx.size(); r++) plapv2fTriples.emplace_back((int)(j+r), (int)vidx[t], weakLbo[k](r, t));
+		//		//for (size_t r = 0; r < vidx.size(); r++) plapv2fTriples.emplace_back((int)(j+r), (int)vidx[t], wlap[k](r, t));
 		//		v2fTriples.emplace_back((int)i++, (int)vidx[t], 1.0);
 		//	}
 		//
 		//	for (size_t t = 0; t < vidx.size(); t++) {
 		//		for (size_t r = 0; r < vidx.size(); r++) {
-		//			plapTriples.emplace_back((int)(j+t), (int)(j+r), weakLbo[k](t, r));
+		//			plapTriples.emplace_back((int)(j+t), (int)(j+r), wlap[k](t, r));
 		//		}
 		//	}
 		//
@@ -521,8 +642,8 @@ public:
 		//v2f.setFromTriplets(v2fTriples.begin(), v2fTriples.end());
 		//plap.setFromTriplets(plapTriples.begin(), plapTriples.end());
 		//
-		//lbo = v2f.transpose() * plap * v2f;
-		//return lbo;
+		//lap = v2f.transpose() * plap * v2f;
+		//return lap;
 		#endif
 	}
 
@@ -590,7 +711,7 @@ public:
 		//	for (int i = 0; i < (int)nf; i++) {
 		//		auto&& vidx = mesh->faces[i]->circuitVerts();
 		//		// Div_f = D.T * M; <-----> Div_v = Div_f * E; (E = D * X);
-		//		Eigen::MatrixX3d op = weakLbo[i] * pos(vidx, Eigen::all);
+		//		Eigen::MatrixX3d op = wlap[i] * pos(vidx, Eigen::all);
 		//		for (int j = 0; j < (int)vidx.size(); j++) {
 		//			for (int k = 0; k < 3; k++) {
 		//				triplets[k].emplace_back((int)vidx[j], (int)i, op(j, k));
@@ -611,7 +732,7 @@ public:
 	// 	Eigen::VectorXd norm(mesh->getNumFaces());
 	// 	for (size_t i = 0; i < mesh->getNumFaces(); i++) {
 	// 		Eigen::VectorXd fi = f(mesh->faces[i]->circuitVerts());
-	// 		norm[i] = std::sqrt((fi.transpose() * weakLbo[i] * fi).value() / mesh->area(mesh->faces[i]));
+	// 		norm[i] = std::sqrt((fi.transpose() * wlap[i] * fi).value() / mesh->area(mesh->faces[i]));
 	// 	}
 	// 	return (grad * f).array().colwise() / norm.array();
 	// }
@@ -772,10 +893,10 @@ public:
 	}
 
 	const Eigen::SparseMatrix<double>& laplacianOp() const  final {
-		if (lbo.size() != 0) return lbo;
+		if (lap.size() != 0) return lap;
 		if (P0.size() == 0) computeProlongation();
-		lbo = P0.transpose() * DiscreteLaplacian(virtualMesh).laplacianOp() * P0;
-		return lbo;
+		lap = P0.transpose() * DiscreteLaplacian(virtualMesh).laplacianOp() * P0;
+		return lap;
 	}
 
 	const SparseMatrices3d& gradientOp() const final {
@@ -790,7 +911,7 @@ public:
 	const SparseMatrices3d& divergenceOp() const final {
 		if (div[0].size() != 0) return div;
 		if (grad[0].rows() == 0) gradientOp();
-		Eigen::VectorXd areas = faceAreas();
+		Eigen::VectorXd areas = P2.transpose() * virtualMesh.faceAreas();
 
 		for (int i = 0; i < 3; i++)
 			div[i] = grad[i].transpose() * areas.asDiagonal();
@@ -798,34 +919,28 @@ public:
 	}
 
 	const Eigen::VectorXd& barycentricAreas() const final {
-		if (s0.size() != 0) return s0;
+		if (hstar0.size() != 0) return hstar0;
 		if (P0.size() == 0) computeProlongation();
-		s0 = P0.transpose() * DiscreteLaplacian(virtualMesh).barycentricAreas();
-		return s0;
+		hstar0 = P0.transpose() * DiscreteLaplacian(virtualMesh).barycentricAreas();
+		return hstar0;
 	}
 
 	const Eigen::VectorXd& voronoiAreas() const final {
-		if (s0.size() != 0) return s0;
+		if (hstar0.size() != 0) return hstar0;
 		if (P0.size() == 0) computeProlongation();
-		s0 = P0.transpose() * DiscreteLaplacian(virtualMesh).voronoiAreas();
-		return s0;
+		hstar0 = P0.transpose() * DiscreteLaplacian(virtualMesh).voronoiAreas();
+		return hstar0;
 	}
 
 	const Eigen::VectorXd& vertexAreas() const final {
 		return voronoiAreas();
 	}
 
-	const Eigen::VectorXd faceAreas() const final {
-		if (P2.size() == 0) computeProlongation();
-		Eigen::VectorXd areas = P2.transpose()* DiscreteLaplacian(virtualMesh).faceAreas();
-		return areas;
-	}
-
 	const Eigen::VectorXd& invFaceAreas() const final {
-		if (s2.size() != 0) return s2;
+		if (hstar2.size() != 0) return hstar2;
 		if (P0.size() == 0) computeProlongation();
-		s2 = P2.transpose() * DiscreteLaplacian(virtualMesh).invFaceAreas();
-		return s2;
+		hstar2 = P2.transpose() * DiscreteLaplacian(virtualMesh).invFaceAreas();
+		return hstar2;
 	}
 
 };
@@ -833,8 +948,8 @@ public:
 // The Diamond Laplace for Polygonal and Polyhedral Meshes . [Bunge A., et al. 2021].
 class DiamondLaplacian : public DiscreteLaplacian {
 	// disable
-	const Eigen::VectorXd& barycentricAreas() const final { assert(!"Function Disabled"); return s0; }
-	const Eigen::VectorXd& voronoiAreas() const final { assert(!"Function Disabled"); return s0; }
+	const Eigen::VectorXd& barycentricAreas() const final { assert(!"Function Disabled"); return hstar0; }
+	const Eigen::VectorXd& voronoiAreas() const final { assert(!"Function Disabled"); return hstar0; }
 
 	mutable Eigen::MatrixX3d dualPos;
 	mutable Eigen::SparseMatrix<double> P;
@@ -863,7 +978,7 @@ class DiamondLaplacian : public DiscreteLaplacian {
 	}
 
 	const Eigen::VectorXd& diamondAreas() const {
-		if (s0.size() != 0) return s0;
+		if (hstar0.size() != 0) return hstar0;
 		if (P.size() == 0) computeDualProlongation();
 
 		auto [nv, ne, nf] = mesh->vef();
@@ -894,8 +1009,8 @@ class DiamondLaplacian : public DiscreteLaplacian {
 			if (!isBoundary) areas[nv + r] += area;
 		}
 
-		s0 = P.transpose() * areas;
-		return s0;
+		hstar0 = P.transpose() * areas;
+		return hstar0;
 	}
 
 public:
@@ -916,7 +1031,7 @@ public:
 	}
 
 	const Eigen::SparseMatrix<double>& laplacianOp() const final {
-		if (lbo.size() != 0) return lbo;
+		if (lap.size() != 0) return lap;
 		if (P.size() == 0) computeDualProlongation();
 
 		auto [nv, ne, nf] = mesh->vef();
@@ -985,8 +1100,8 @@ public:
 			grad[i] = G * P;
 			div[i] = grad[i].transpose() * diaAreas.col(i).asDiagonal();
 		}
-		lbo = div * grad;
-		return lbo;
+		lap = div * grad;
+		return lap;
 	}
 
 	const Eigen::VectorXd& vertexAreas() const final {

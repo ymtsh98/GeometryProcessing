@@ -34,6 +34,9 @@ public:
 		build(mesh.pos, mesh.faceList());
 	}
 
+	SurfaceMesh(SurfaceMesh&& mesh) noexcept : 
+		HalfedgeMesh(std::move(mesh)), pos(std::move(mesh.pos)) {}
+
 	SurfaceMesh& operator=(const SurfaceMesh& mesh) {
 		reset(true);
 		build(mesh.pos, mesh.faceList());
@@ -141,7 +144,8 @@ public:
 			n += normal(face);
 		}
 
-		return n.normalized();
+		double norm = n.norm(); // for degenearte triangle
+		return (norm < 1e-20) ? n : n.normalized();
 	}
 
 	// edge length
@@ -161,7 +165,8 @@ public:
 		auto k = edge->next->vert->id;
 		auto e1 = (pos.row(i) - pos.row(k)).eval();
 		auto e2 = (pos.row(j) - pos.row(k)).eval();
-		return e1.dot(e2)/ e1.cross(e2).norm();
+		double denom = e1.cross(e2).norm(); // for degenearte triangle
+		return (denom < 1e-20) ? 0.0 : e1.dot(e2)/ denom ;
 	}
 
 	// dot product between e0 and e1
@@ -239,6 +244,14 @@ public:
 		return lengths;
 	}
 
+	Eigen::MatrixX3d edgeVectors() const {
+		Eigen::MatrixX3d vecs(getNumEdges(), 3);
+		for (size_t i = 0; i < getNumEdges(); i++) {
+			vecs.row(i) = edgevec(edges[i]);
+		}
+		return vecs;
+	}
+
 	// average edge length
 	double avgEdgeLength() const {
 		return edgeLengths().mean();
@@ -288,12 +301,28 @@ public:
 		return center;
 	}
 
+	Eigen::VectorXd faceAreas() const {
+		Eigen::VectorXd areas(getNumFaces());
+		for (size_t i = 0; i < getNumFaces(); i++) {
+			areas[i] = area(faces[i]);
+		}
+		return areas;
+	}
+
 	Eigen::MatrixX3d faceNormals() const {
 		Eigen::MatrixX3d normals = Eigen::MatrixX3d::Zero(getNumFaces(), 3);
 		for (size_t i = 0; i < getNumFaces(); i++) {
 			normals.row(i) = normal(faces[i]);
 		}
 		return normals;
+	}
+
+	Eigen::MatrixX3d faceCenters() const {
+		Eigen::MatrixX3d centers = Eigen::MatrixX3d::Zero(getNumFaces(), 3);
+		for (size_t i = 0; i < getNumFaces(); i++) {
+			centers.row(i) = center(faces[i]);
+		}
+		return centers;
 	}
 
 	Eigen::MatrixX3d vertexNormals() const {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <kika/halfedge_mesh.hpp>
 #include <kika/surface_mesh.hpp>
 #include <kika/diff_geometry.hpp>
 
@@ -405,7 +406,7 @@ class VirtualSourceSolver {
 
 		for (auto s : src) {
 			if (arrived[s]) continue;
-			for (const auto& e2 : mesh.get().verts[s]->incidentEdges<heds::Ptr>()) {
+			for (const auto& e2 : mesh.get().verts[s]->template incidentEdges<kika::heds::Ptr>()) {
 				if (e2->face == nullptr) continue;
 
 				auto& e0 = e2->next;
@@ -651,7 +652,7 @@ public:
 
 		for (auto s : src) {
 			if (arrived[s]) continue;
-			for (const auto& e2 : mesh.get().verts[s]->incidentEdges<heds::Ptr>()) {
+			for (const auto& e2 : mesh.get().verts[s]->template incidentEdges<kika::heds::Ptr>()) {
 				if (e2->face == nullptr) continue;
 
 				auto& e0 = e2->next;
@@ -861,8 +862,8 @@ public:
 		dsl.gradientOp();
 		dsl.divergenceOp();
 
-		heat.compute(eig::spdiag(dsl.s0) + lambda * dsl.lbo);
-		poisson.compute(-dsl.lbo);
+		heat.compute(eig::spdiag(dsl.hstar0) + lambda * dsl.lap);
+		poisson.compute(-dsl.lap);
 	}
 
 	template <typename T = uint32_t>

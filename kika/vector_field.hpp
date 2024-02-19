@@ -1,8 +1,5 @@
 #pragma once
 
-#include <Eigen/Core>
-#include <Eigen/Dense>
-
 #include <kika/kikautil.hpp>
 #include <kika/eigutil.hpp>
 #include <kika/surface_mesh.hpp>

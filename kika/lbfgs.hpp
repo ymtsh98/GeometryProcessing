@@ -31,6 +31,7 @@ protected:
 		const size_t memory = 10, const double suffDec = 1e-4, const double optTol = 1e-5);
 
 	MinConfPQN();
+	virtual ~MinConfPQN();
 
 	void freeResources();
 };
@@ -284,6 +285,8 @@ protected:
 
 	MinConfPQN() {}
 
+	virtual ~MinConfPQN() {}
+
 	void freeResources() {
 		N.resize(0, 0);
 		M.resize(0, 0);
@@ -317,6 +320,7 @@ protected:
 		const size_t memory = 10, const double suffDec = 1e-4, const double optTol = 1e-5);
 
 	MinConfPQNCmplx();
+	virtual ~MinConfPQNCmplx();
 
 	void freeResources();
 };
@@ -569,6 +573,7 @@ protected:
 	}
 
 	MinConfPQNCmplx() {}
+	virtual ~MinConfPQNCmplx();
 
 	void freeResources() {
 		N.resize(0, 0);

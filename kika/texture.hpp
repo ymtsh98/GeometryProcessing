@@ -41,6 +41,7 @@ struct TextureImage {
 
 	TextureImage() : reso(0), img({}) { prepareGeomData(); }
 	TextureImage(const uint32_t reso) : reso(reso), img(reso * reso, 0xfffffffful) { prepareGeomData(); }
+	virtual ~TextureImage() {}
 
 	size_t size() const {
 		return reso * reso * sizeof(uint32_t);

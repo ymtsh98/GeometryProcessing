@@ -609,11 +609,12 @@ inline ColorRamp inferno() {
 
 template <typename T>
 std::vector<std::array<double, 3>> normalizedColor(const T& values, const ColorRamp& plt = palette::blueRed()) {
-	T copy = values;
-	double min = *std::min_element(copy.begin(), copy.end());
-	for (auto& v : copy) v -= min;
+	std::vector<double> copy(values.size());
+
+	double min = *std::min_element(values.begin(), values.end());
+	for (size_t i = 0; i < copy.size(); i++) copy[i] = values[i] - min;
 	double max = *std::max_element(copy.begin(), copy.end());
-	for (auto& v : copy) v /= max;
+	for (size_t i = 0; i < copy.size(); i++) copy[i] = copy[i] / max;
 	std::vector<std::array<double, 3>> colors(copy.size());
 	for (size_t i = 0; i < colors.size(); i++) {
 		fRGBA rgba = plt(copy[i]);

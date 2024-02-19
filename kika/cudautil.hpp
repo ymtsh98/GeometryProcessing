@@ -61,11 +61,7 @@ public:
 	}
 
 	~CuData() {
-		cudaFree(device);
-		device = nullptr;
-		if constexpr (Pinned) cudaFreeHost(host);
-		else free(host);
-		host = nullptr;
+		free();
 	}
 
 	// @param size : size of allocation (byte)
@@ -78,6 +74,20 @@ public:
 		}
 		cudaMalloc((void**)&device, size);
 		assert(host != nullptr && device != nullptr);
+	}
+
+	void free() {
+		cudaFree(device);
+		device = nullptr;
+		if constexpr (Pinned) cudaFreeHost(host);
+		else free(host);
+		host = nullptr;
+		this->size = 0;
+	}
+
+	void realloc(const size_t size) {
+		free();
+		alloc(size);
 	}
 
 	void host2device() {
@@ -125,11 +135,7 @@ public:
 	CuData2D() : host(nullptr), device(nullptr), size(0), dp(0), hp(0), width(0), height(0) {}
 
 	~CuData2D() {
-		if constexpr (Pinned) cudaFreeHost(host);
-		else free(host);
-		host = nullptr;
-		cudaFree(device);
-		device = nullptr;
+		free();
 	}
 
 	// @param size : size of allocation (byte)
@@ -142,6 +148,20 @@ public:
 		else host = (T*)malloc(size);
 		cudaMallocPitch((void**)&device, &dp, width, height);
 		assert(host != nullptr && device != nullptr);
+	}
+
+	void free() {
+		if constexpr (Pinned) cudaFreeHost(host);
+		else free(host);
+		host = nullptr;
+		cudaFree(device);
+		device = nullptr;
+		this->size = 0;
+	}
+
+	void realloc(const size_t width, const size_t height) {
+		free();
+		alloc(width, height);
 	}
 
 	void host2device() {
@@ -159,5 +179,37 @@ public:
 		cudaMemcpy2D(host, hp, device, dp, width, height, cudaMemcpyHostToDevice);
 	}
 };
+
+inline std::tuple<int, int, int> copySparseMatData(const Eigen::SparseMatrix<double>& A, 
+	CuData<int>& rowIndex, CuData<int>& colIndex, CuData<double>& nnzValue) {
+	auto rows = A.rows(), cols = A.cols();
+	auto nnzs = A.nonZeros();
+
+	rowIndex.alloc((rows + 1) * sizeof(int));
+	colIndex.alloc(nnzs * sizeof(int));
+	nnzValue.alloc(nnzs * sizeof(double));
+
+	memcpy(rowIndex.host, A.outerIndexPtr(), rows * sizeof(int));
+	rowIndex.host[rows] = nnzs;
+	memcpy(colIndex.host, A.innerIndexPtr(), colIndex.size);
+	memcpy(nnzValue.host, A.valuePtr(), nnzValue.size);
+
+	return std::make_tuple((int)rows, (int)cols, (int)nnzs);
+
+	// auto [row, col, nnz] = kika::eig::getCsrDataFromSparseMatUpper(A, 0, true);
+	// 
+	// auto rows = A.rows(), cols = A.cols();
+	// auto nnzs = nnz.size();
+	// 
+	// rowIndex.alloc((rows + 1) * sizeof(int));
+	// colIndex.alloc(nnzs * sizeof(int));
+	// nnzValue.alloc(nnzs * sizeof(double));
+	// 
+	// memcpy(rowIndex.host, row.data(), rowIndex.size);
+	// memcpy(colIndex.host, col.data(), colIndex.size);
+	// memcpy(nnzValue.host, nnz.data(), nnzValue.size);
+	// 
+	// return std::make_tuple((int)rows, (int)cols, (int)nnzs);
+}
 
 }

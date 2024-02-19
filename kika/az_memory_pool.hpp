@@ -32,7 +32,17 @@ public:
 		static_assert(((alignof(MType) == alignof(MTypes)) && ... && true), "AZMemoryPool requires template arguments are the same align.");
 	}
 
-	~AZMemoryPool() { reset(); }
+	AZMemoryPool(AZMemoryPool&& mpool) noexcept : 
+		memBuffers(std::move(mpool.memBuffers)),
+		slot(mpool.slot), offset(mpool.offset), bufferSize(mpool.bufferSize){
+		mpool.slot = 0;
+		mpool.memBuffers.resize(1);
+		mpool.memBuffers[0] = nullptr;
+	}
+
+	~AZMemoryPool() { 
+		reset(); 
+	}
 
 	/// init allocation
 	template <typename Size, typename... Sizes>

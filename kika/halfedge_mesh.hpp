@@ -552,10 +552,10 @@ private:
 
 	template <typename T>
 	inline void appendKey(std::vector<EdgeKey>& feKey, uint32_t i, const T& faceAttrib) {
-		if KIKA_CONSTEXPR(util::IsEigen<T>) {
+		if constexpr (util::IsEigen<T>) {
 			for (size_t j = 0, k = (size_t)faceAttrib.cols(); j < k; j++)
 				feKey.emplace_back(faceAttrib(i, j), faceAttrib(i, (j+1)%k));
-		} else if KIKA_CONSTEXPR(util::IsStdvec2d<T>) {
+		} else if constexpr (util::IsStdvec2d<T>) {
 			for (size_t j = 0, k = faceAttrib[i].size(); j < k; j++)
 				feKey.emplace_back(faceAttrib[i][j], faceAttrib[i][(j+1)%k]);
 		} else {
@@ -749,6 +749,12 @@ public:
 		return *this;
 	}
 
+	HalfedgeMesh(HalfedgeMesh&& mesh) noexcept : 
+		mpool(std::move(mesh.mpool)), 
+		verts(std::move(mesh.verts)), 
+		edges(std::move(mesh.edges)), 
+		faces(std::move(mesh.faces)) {}
+
 	~HalfedgeMesh() {
 		reset(false);
 	}
@@ -861,8 +867,10 @@ public:
 
 	// k ring neighbors
 	template <typename T = uint32_t>
-	std::vector<T> kRingNeighbs(const uint32_t src, const uint32_t k) const {
+	std::vector<T> kRingNeighbs(const uint32_t src, const uint32_t k, const bool self = false) const {
 		std::vector<T> neighbs;
+		neighbs.reserve(getNumVerts());
+		if (self) neighbs.emplace_back(src);
 
 		std::deque<std::pair<T, T>> search;
 		search.emplace_back(0, src);
